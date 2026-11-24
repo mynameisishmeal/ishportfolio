@@ -91,6 +91,7 @@ interface StoreProviderProps {
   initialProfile?: SiteProfile;
   initialProjects?: ProjectItem[];
   initialProducts?: Product[];
+  initialPaymentConfig?: ShopPaymentConfig;
 }
 
 export function StoreProvider({
@@ -98,6 +99,7 @@ export function StoreProvider({
   initialProfile,
   initialProjects,
   initialProducts,
+  initialPaymentConfig,
 }: StoreProviderProps) {
   const [profile, setProfile] = useState<SiteProfile>(initialProfile || INITIAL_PROFILE);
   const [projects, setProjects] = useState<ProjectItem[]>(initialProjects || INITIAL_PROJECTS);
@@ -111,7 +113,9 @@ export function StoreProvider({
 
   const [accountUser, setAccountUser] = useState<PublicHostUser | null>(null);
   const [shopOrders, setShopOrders] = useState<Order[]>([]);
-  const [paymentConfig, setPaymentConfig] = useState<ShopPaymentConfig>(DEFAULT_PAYMENT_CFG);
+  const [paymentConfig, setPaymentConfig] = useState<ShopPaymentConfig>(
+    initialPaymentConfig || DEFAULT_PAYMENT_CFG
+  );
   const [accountLoading, setAccountLoading] = useState(true);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState<string | null>(null);
 

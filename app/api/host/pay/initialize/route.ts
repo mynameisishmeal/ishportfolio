@@ -79,7 +79,7 @@ export async function POST(request: Request) {
       return NextResponse.json(
         {
           success: false,
-          error: 'Paystack checkout is not configured yet. Please enable Paystack in Admin -> Profile & Settings.',
+          error: 'Paystack is not active yet',
         },
         { status: 400, headers: rlHeaders }
       );

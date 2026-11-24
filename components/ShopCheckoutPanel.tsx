@@ -28,9 +28,11 @@ export default function ShopCheckoutPanel({
     setCompletedOrder,
   } = useStore();
 
-  const [paymentMethod, setPaymentMethod] = useState<'Paystack' | 'Bank Transfer'>(
-    initialMethod || 'Bank Transfer'
-  );
+  const [paymentMethod, setPaymentMethod] = useState<'Paystack' | 'Bank Transfer'>(() => {
+    if (paymentConfig.paystackEnabled && !paymentConfig.bankTransferEnabled) return 'Paystack';
+    if (!paymentConfig.paystackEnabled && paymentConfig.bankTransferEnabled) return 'Bank Transfer';
+    return initialMethod || 'Bank Transfer';
+  });
   const [notes, setNotes] = useState('');
   const [website, setWebsite] = useState('');
   const [narrationCode, setNarrationCode] = useState('');
@@ -44,12 +46,12 @@ export default function ShopCheckoutPanel({
   }, []);
 
   useEffect(() => {
-    if (initialMethod) {
-      setPaymentMethod(initialMethod);
-    } else if (paymentConfig.paystackEnabled && !paymentConfig.bankTransferEnabled) {
+    if (paymentConfig.paystackEnabled && !paymentConfig.bankTransferEnabled) {
       setPaymentMethod('Paystack');
-    } else if (paymentConfig.bankTransferEnabled) {
+    } else if (!paymentConfig.paystackEnabled && paymentConfig.bankTransferEnabled) {
       setPaymentMethod('Bank Transfer');
+    } else if (initialMethod) {
+      setPaymentMethod(initialMethod);
     }
   }, [initialMethod, paymentConfig.paystackEnabled, paymentConfig.bankTransferEnabled]);
 
@@ -140,10 +142,12 @@ export default function ShopCheckoutPanel({
   };
 
   const formattedTotal = formatPrice(total, profile.currencySymbol, profile.currencyCode);
-  const canPay =
-    paymentMethod === 'Paystack'
-      ? paymentConfig.paystackEnabled
-      : paymentConfig.bankTransferEnabled;
+  const paystackReady = paymentConfig.paystackEnabled;
+  const bankReady = paymentConfig.bankTransferEnabled;
+  const neitherConfigured = !paystackReady && !bankReady;
+  const showPaystackBtn = paystackReady || neitherConfigured;
+  const showBankBtn = bankReady || neitherConfigured;
+  const canPay = paymentMethod === 'Paystack' ? paystackReady : bankReady;
 
   return (
     <form onSubmit={handleCheckout} className="space-y-3.5">
@@ -175,37 +179,47 @@ export default function ShopCheckoutPanel({
         <label className="mb-1.5 block text-[11px] font-medium text-zinc-400">
           Choose Payment Method
         </label>
-        <div className="grid grid-cols-2 gap-2 rounded-xl border border-white/10 bg-zinc-950 p-1">
-          <button
-            type="button"
-            onClick={() => {
-              setPaymentMethod('Paystack');
-              setErrorMsg('');
-            }}
-            className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition cursor-pointer ${
-              paymentMethod === 'Paystack'
-                ? 'bg-amber-400 text-zinc-950'
-                : 'text-zinc-400 hover:text-zinc-100'
-            }`}
-          >
-            <CreditCard className="h-3.5 w-3.5" />
-            <span>Paystack</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setPaymentMethod('Bank Transfer');
-              setErrorMsg('');
-            }}
-            className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition cursor-pointer ${
-              paymentMethod === 'Bank Transfer'
-                ? 'bg-emerald-400 text-zinc-950'
-                : 'text-zinc-400 hover:text-zinc-100'
-            }`}
-          >
-            <Landmark className="h-3.5 w-3.5" />
-            <span>Bank Transfer</span>
-          </button>
+        <div
+          className={`grid ${
+            showPaystackBtn && showBankBtn ? 'grid-cols-2' : 'grid-cols-1'
+          } gap-2 rounded-xl border border-white/10 bg-zinc-950 p-1`}
+        >
+          {showPaystackBtn && (
+            <button
+              type="button"
+              disabled={!paystackReady}
+              onClick={() => {
+                setPaymentMethod('Paystack');
+                setErrorMsg('');
+              }}
+              className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:bg-zinc-900 disabled:text-zinc-500 cursor-pointer ${
+                paymentMethod === 'Paystack'
+                  ? 'bg-amber-400 text-zinc-950'
+                  : 'text-zinc-400 hover:text-zinc-100'
+              }`}
+            >
+              <CreditCard className="h-3.5 w-3.5" />
+              <span>{paystackReady ? 'Paystack' : 'Disabled'}</span>
+            </button>
+          )}
+          {showBankBtn && (
+            <button
+              type="button"
+              disabled={!bankReady}
+              onClick={() => {
+                setPaymentMethod('Bank Transfer');
+                setErrorMsg('');
+              }}
+              className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:bg-zinc-900 disabled:text-zinc-500 cursor-pointer ${
+                paymentMethod === 'Bank Transfer'
+                  ? 'bg-emerald-400 text-zinc-950'
+                  : 'text-zinc-400 hover:text-zinc-100'
+              }`}
+            >
+              <Landmark className="h-3.5 w-3.5" />
+              <span>{bankReady ? 'Bank Transfer' : 'Disabled'}</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -217,7 +231,7 @@ export default function ShopCheckoutPanel({
         >
           {paymentConfig.paystackEnabled
             ? 'You will be redirected securely to Paystack (Card / Bank / USSD) and automatically verified back here.'
-            : 'Paystack is not active yet — use Bank Transfer or configure Paystack keys in Admin -> Profile & Settings.'}
+            : 'Paystack is not active yet'}
         </p>
       ) : paymentConfig.bankTransferEnabled && paymentConfig.bankTransfer ? (
         <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3 text-[11px] space-y-1.5">
@@ -346,19 +360,21 @@ export default function ShopCheckoutPanel({
       <button
         type="submit"
         disabled={submitting || !canPay}
-        className={`w-full rounded-xl py-3 text-sm font-semibold text-zinc-950 transition disabled:cursor-not-allowed disabled:opacity-55 cursor-pointer ${
+        className={`w-full rounded-xl py-3 text-sm font-semibold text-zinc-950 transition disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 cursor-pointer ${
           paymentMethod === 'Bank Transfer'
             ? 'bg-emerald-400 hover:bg-emerald-300'
             : 'bg-amber-400 hover:bg-amber-300'
         }`}
       >
-        {submitting
-          ? paymentMethod === 'Paystack'
-            ? 'Redirecting to Paystack...'
-            : 'Recording Order...'
-          : paymentMethod === 'Paystack'
-            ? `Pay ${formattedTotal} via Paystack`
-            : `Submit Bank Transfer Order (${formattedTotal})`}
+        {!canPay
+          ? 'Disabled'
+          : submitting
+            ? paymentMethod === 'Paystack'
+              ? 'Redirecting to Paystack...'
+              : 'Recording Order...'
+            : paymentMethod === 'Paystack'
+              ? `Pay ${formattedTotal} via Paystack`
+              : `Submit Bank Transfer Order (${formattedTotal})`}
       </button>
     </form>
   );

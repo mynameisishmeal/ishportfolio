@@ -152,7 +152,9 @@ export default function HostSection() {
         if (data.config) {
           setConfig(data.config);
           if (!data.config.paystackEnabled && data.config.bankTransferEnabled) {
-            setPayMethod(prev => (prev === 'paystack' ? 'bank' : prev));
+            setPayMethod('bank');
+          } else if (data.config.paystackEnabled && !data.config.bankTransferEnabled) {
+            setPayMethod('paystack');
           }
         }
         const nextUser = data.user || null;
@@ -635,50 +637,67 @@ export default function HostSection() {
                 ) : null}
 
                 {/* Payment Method Switcher */}
-                <div>
-                  <label className="mb-1.5 block text-xs font-medium text-zinc-300">
-                    Payment Method
-                  </label>
-                  <div className="grid grid-cols-2 gap-2 rounded-xl border border-white/10 bg-zinc-950 p-1">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPayMethod('paystack');
-                        setPayMsg(null);
-                      }}
-                      className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition cursor-pointer ${
-                        payMethod === 'paystack'
-                          ? 'bg-amber-400 text-zinc-950'
-                          : 'text-zinc-400 hover:text-zinc-100'
-                      }`}
-                    >
-                      <CreditCard className="h-3.5 w-3.5" />
-                      <span>Paystack</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPayMethod('bank');
-                        setPayMsg(null);
-                      }}
-                      className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition cursor-pointer ${
-                        payMethod === 'bank'
-                          ? 'bg-emerald-400 text-zinc-950'
-                          : 'text-zinc-400 hover:text-zinc-100'
-                      }`}
-                    >
-                      <Landmark className="h-3.5 w-3.5" />
-                      <span>Bank Transfer</span>
-                    </button>
-                  </div>
-                </div>
+                {(() => {
+                  const paystackReady = config.paystackEnabled;
+                  const bankReady = Boolean(config.bankTransferEnabled);
+                  const neitherConfigured = !paystackReady && !bankReady;
+                  const showPaystackBtn = paystackReady || neitherConfigured;
+                  const showBankBtn = bankReady || neitherConfigured;
+
+                  return (
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium text-zinc-300">
+                        Payment Method
+                      </label>
+                      <div
+                        className={`grid ${
+                          showPaystackBtn && showBankBtn ? 'grid-cols-2' : 'grid-cols-1'
+                        } gap-2 rounded-xl border border-white/10 bg-zinc-950 p-1`}
+                      >
+                        {showPaystackBtn && (
+                          <button
+                            type="button"
+                            disabled={!paystackReady}
+                            onClick={() => {
+                              setPayMethod('paystack');
+                              setPayMsg(null);
+                            }}
+                            className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:bg-zinc-900 disabled:text-zinc-500 cursor-pointer ${
+                              payMethod === 'paystack'
+                                ? 'bg-amber-400 text-zinc-950'
+                                : 'text-zinc-400 hover:text-zinc-100'
+                            }`}
+                          >
+                            <CreditCard className="h-3.5 w-3.5" />
+                            <span>{paystackReady ? 'Paystack' : 'Disabled'}</span>
+                          </button>
+                        )}
+                        {showBankBtn && (
+                          <button
+                            type="button"
+                            disabled={!bankReady}
+                            onClick={() => {
+                              setPayMethod('bank');
+                              setPayMsg(null);
+                            }}
+                            className={`inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:bg-zinc-900 disabled:text-zinc-500 cursor-pointer ${
+                              payMethod === 'bank'
+                                ? 'bg-emerald-400 text-zinc-950'
+                                : 'text-zinc-400 hover:text-zinc-100'
+                            }`}
+                          >
+                            <Landmark className="h-3.5 w-3.5" />
+                            <span>{bankReady ? 'Bank Transfer' : 'Disabled'}</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {payMethod === 'paystack' ? (
                   !config.paystackEnabled ? (
-                    <p className="text-xs text-amber-300">
-                      Paystack keys are not active yet — use Direct Bank Transfer or configure
-                      Paystack in Admin -&gt; Profile &amp; Settings.
-                    </p>
+                    <p className="text-xs text-amber-300">Paystack is not active yet</p>
                   ) : null
                 ) : config.bankTransferEnabled && config.bankTransfer ? (
                   <div className="space-y-3 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-3.5 text-xs">
@@ -812,7 +831,7 @@ export default function HostSection() {
                       ? !config.paystackEnabled
                       : !config.bankTransferEnabled)
                   }
-                  className={`inline-flex w-full items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold text-zinc-950 transition disabled:cursor-not-allowed disabled:opacity-55 cursor-pointer ${
+                  className={`inline-flex w-full items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold text-zinc-950 transition disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 cursor-pointer ${
                     payMethod === 'bank'
                       ? 'bg-emerald-400 hover:bg-emerald-300'
                       : 'bg-amber-400 hover:bg-amber-300'
@@ -824,13 +843,17 @@ export default function HostSection() {
                     <CreditCard className="h-4 w-4" />
                   )}
                   <span>
-                    {paying
-                      ? payMethod === 'bank'
-                        ? 'Submitting Bank Transfer...'
-                        : 'Redirecting to Paystack...'
-                      : payMethod === 'bank'
-                        ? `Submit Bank Transfer (${formattedTotalFee})`
-                        : `Pay ${formattedTotalFee} via Paystack`}
+                    {!(payMethod === 'paystack'
+                      ? config.paystackEnabled
+                      : config.bankTransferEnabled)
+                      ? 'Disabled'
+                      : paying
+                        ? payMethod === 'bank'
+                          ? 'Submitting Bank Transfer...'
+                          : 'Redirecting to Paystack...'
+                        : payMethod === 'bank'
+                          ? `Submit Bank Transfer (${formattedTotalFee})`
+                          : `Pay ${formattedTotalFee} via Paystack`}
                   </span>
                 </button>
               </form>

@@ -29,6 +29,67 @@ import {
 
 const PRODUCTS_PER_PAGE = 3;
 
+interface ProductPaymentButtonsProps {
+  outOfStock: boolean;
+  paystackEnabled: boolean;
+  bankTransferEnabled: boolean;
+  paystackLabel?: string;
+  size?: 'card' | 'modal';
+  onSelect: (method: 'Paystack' | 'Bank Transfer') => void;
+}
+
+function ProductPaymentButtons({
+  outOfStock,
+  paystackEnabled,
+  bankTransferEnabled,
+  paystackLabel = 'Paystack',
+  size = 'card',
+  onSelect,
+}: ProductPaymentButtonsProps) {
+  const neitherConfigured = !paystackEnabled && !bankTransferEnabled;
+  const showPaystack = paystackEnabled || neitherConfigured;
+  const showBank = bankTransferEnabled || neitherConfigured;
+  const twoCols = showPaystack && showBank;
+
+  const paddingClass = size === 'modal' ? 'gap-2 px-4 py-2.5' : 'gap-1.5 px-3 py-2';
+  const iconClass = size === 'modal' ? 'h-4 w-4' : 'h-3.5 w-3.5';
+  const gridGapClass = size === 'modal' ? 'gap-2.5' : 'gap-2';
+
+  return (
+    <div className={`grid ${twoCols ? 'grid-cols-2' : 'grid-cols-1'} ${gridGapClass}`}>
+      {showPaystack && (
+        <button
+          type="button"
+          disabled={outOfStock || !paystackEnabled}
+          onClick={e => {
+            e.stopPropagation();
+            onSelect('Paystack');
+          }}
+          className={`inline-flex items-center justify-center rounded-xl bg-amber-400 ${paddingClass} text-xs font-semibold text-zinc-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 cursor-pointer`}
+        >
+          <CreditCard className={iconClass} />
+          <span>{paystackEnabled ? paystackLabel : 'Disabled'}</span>
+        </button>
+      )}
+
+      {showBank && (
+        <button
+          type="button"
+          disabled={outOfStock || !bankTransferEnabled}
+          onClick={e => {
+            e.stopPropagation();
+            onSelect('Bank Transfer');
+          }}
+          className={`inline-flex items-center justify-center rounded-xl bg-emerald-400 ${paddingClass} text-xs font-semibold text-zinc-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 cursor-pointer`}
+        >
+          <Landmark className={iconClass} />
+          <span>{bankTransferEnabled ? 'Bank Transfer' : 'Disabled'}</span>
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function ShopSection() {
   const {
     profile,
@@ -562,33 +623,12 @@ export default function ShopSection() {
                               </button>
                             </div>
 
-                            <div className="grid grid-cols-2 gap-2">
-                              <button
-                                type="button"
-                                disabled={outOfStock}
-                                onClick={e => {
-                                  e.stopPropagation();
-                                  openQuickCheckout(product, 'Paystack');
-                                }}
-                                className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-amber-400 px-3 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 cursor-pointer"
-                              >
-                                <CreditCard className="h-3.5 w-3.5" />
-                                <span>Paystack</span>
-                              </button>
-
-                              <button
-                                type="button"
-                                disabled={outOfStock}
-                                onClick={e => {
-                                  e.stopPropagation();
-                                  openQuickCheckout(product, 'Bank Transfer');
-                                }}
-                                className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-emerald-400 px-3 py-2 text-xs font-semibold text-zinc-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 cursor-pointer"
-                              >
-                                <Landmark className="h-3.5 w-3.5" />
-                                <span>Bank Transfer</span>
-                              </button>
-                            </div>
+                            <ProductPaymentButtons
+                              outOfStock={outOfStock}
+                              paystackEnabled={paymentConfig.paystackEnabled}
+                              bankTransferEnabled={paymentConfig.bankTransferEnabled}
+                              onSelect={method => openQuickCheckout(product, method)}
+                            />
                           </div>
                         </article>
                       </MotionReveal>
@@ -747,35 +787,18 @@ export default function ShopSection() {
                 </button>
               </div>
 
-              <div className="grid grid-cols-2 gap-2.5">
-                <button
-                  type="button"
-                  disabled={activeProduct.stock === 0}
-                  onClick={() => {
-                    const p = activeProduct;
-                    setActiveProduct(null);
-                    openQuickCheckout(p, 'Paystack');
-                  }}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-amber-400 px-4 py-2.5 text-xs font-semibold text-zinc-950 transition hover:bg-amber-300 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 cursor-pointer"
-                >
-                  <CreditCard className="h-4 w-4" />
-                  <span>Pay via Paystack</span>
-                </button>
-
-                <button
-                  type="button"
-                  disabled={activeProduct.stock === 0}
-                  onClick={() => {
-                    const p = activeProduct;
-                    setActiveProduct(null);
-                    openQuickCheckout(p, 'Bank Transfer');
-                  }}
-                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-emerald-400 px-4 py-2.5 text-xs font-semibold text-zinc-950 transition hover:bg-emerald-300 disabled:cursor-not-allowed disabled:bg-zinc-800 disabled:text-zinc-500 cursor-pointer"
-                >
-                  <Landmark className="h-4 w-4" />
-                  <span>Bank Transfer</span>
-                </button>
-              </div>
+              <ProductPaymentButtons
+                outOfStock={activeProduct.stock === 0}
+                paystackEnabled={paymentConfig.paystackEnabled}
+                bankTransferEnabled={paymentConfig.bankTransferEnabled}
+                paystackLabel="Pay via Paystack"
+                size="modal"
+                onSelect={method => {
+                  const p = activeProduct;
+                  setActiveProduct(null);
+                  openQuickCheckout(p, method);
+                }}
+              />
             </div>
           </div>
         </div>
