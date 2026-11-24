@@ -1,0 +1,16 @@
+# Exclude local reference projects, secrets, and build artifacts from Vercel uploads
+Project/
+.env
+.env.*
+!.env.example
+.git/
+.next/
+node_modules/
+.portfolio-data.json
+public/uploads/
+tsconfig.tsbuildinfo
+playwright-report/
+test-results/
+*.log
+.DS_Store
+Thumbs.db
