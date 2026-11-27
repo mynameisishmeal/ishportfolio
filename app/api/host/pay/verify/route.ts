@@ -6,15 +6,37 @@ import {
   markHostingPaidByReference,
 } from '@/lib/store';
 import { verifyPaystackTransaction } from '@/lib/paystack';
+import { checkPersistentRateLimit, getClientIp, rateLimitHeaders } from '@/lib/rate-limit';
 import { notifyHostPaidToTelegram } from '@/lib/telegram';
+import { safeErrorMessage } from '@/lib/security';
+
+export const dynamic = 'force-dynamic';
 
 const REF_PATTERN = /^[a-zA-Z0-9_-]{6,100}$/;
 
 export async function GET(request: Request) {
   try {
+    const ip = getClientIp(request);
+    const rate = await checkPersistentRateLimit({
+      namespace: 'host-pay-verify',
+      key: ip,
+      maxRequests: 20,
+      windowMs: 5 * 60_000,
+    });
+    const rlHeaders = rateLimitHeaders(rate);
+    if (!rate.allowed) {
+      return NextResponse.json(
+        { success: false, error: 'Too many verification attempts. Please wait a moment.' },
+        { status: 429, headers: rlHeaders }
+      );
+    }
+
     const user = await getAuthenticatedHostUser(request);
     if (!user) {
-      return NextResponse.json({ success: false, error: 'Please sign in first.' }, { status: 401 });
+      return NextResponse.json(
+        { success: false, error: 'Please sign in first.' },
+        { status: 401, headers: rlHeaders }
+      );
     }
 
     const url = new URL(request.url);
@@ -96,7 +118,9 @@ export async function GET(request: Request) {
       request: finalRequest,
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to verify hosting payment';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to verify hosting payment') },
+      { status: 500 }
+    );
   }
 }

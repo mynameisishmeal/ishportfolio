@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { isAdminAuthenticated } from '@/lib/auth';
 import { deleteHostingRequest, updateHostingRequestAdmin } from '@/lib/store';
+import { isSafeHttpUrl } from '@/lib/format';
+import { safeErrorMessage, verifySameOrigin } from '@/lib/security';
 import { HostingStatus, PaymentStatus } from '@/lib/types';
 
 const VALID_STATUSES: HostingStatus[] = [
@@ -19,17 +21,22 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const csrfError = verifySameOrigin(request);
+    if (csrfError) {
+      return NextResponse.json({ success: false, error: csrfError }, { status: 403 });
+    }
+
     if (!(await isAdminAuthenticated())) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
     const { id } = await params;
-    const body = await request.json();
+    const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
 
     const rawUrl = typeof body?.liveUrl === 'string' ? body.liveUrl.trim() : undefined;
-    if (rawUrl && !/^https?:\/\//i.test(rawUrl)) {
+    if (rawUrl && !isSafeHttpUrl(rawUrl)) {
       return NextResponse.json(
-        { success: false, error: 'Live URL must start with http:// or https://' },
+        { success: false, error: 'Live URL must be a valid http:// or https:// URL' },
         { status: 400 }
       );
     }
@@ -67,16 +74,23 @@ export async function PATCH(
 
     return NextResponse.json({ success: true, request: updated });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to update hosting request';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to update hosting request') },
+      { status: 500 }
+    );
   }
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const csrfError = verifySameOrigin(request);
+    if (csrfError) {
+      return NextResponse.json({ success: false, error: csrfError }, { status: 403 });
+    }
+
     if (!(await isAdminAuthenticated())) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
@@ -87,7 +101,9 @@ export async function DELETE(
     }
     return NextResponse.json({ success: true });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to delete hosting request';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to delete hosting request') },
+      { status: 500 }
+    );
   }
 }

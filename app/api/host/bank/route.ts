@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getAuthenticatedHostUser } from '@/lib/host-auth';
-import { generateNarrationCode } from '@/lib/format';
+import { generateNarrationCode, isSafeHttpUrl } from '@/lib/format';
 import {
   createHostingRequest,
   getBankTransferConfig,
@@ -13,11 +13,17 @@ import {
   rateLimitHeaders,
 } from '@/lib/rate-limit';
 import { notifyHostBankTransferToTelegram } from '@/lib/telegram';
+import { safeErrorMessage, verifySameOrigin } from '@/lib/security';
 
 const NARRATION_PATTERN = /^[A-Z0-9-]{6,32}$/;
 
 export async function POST(request: Request) {
   try {
+    const csrfError = verifySameOrigin(request);
+    if (csrfError) {
+      return NextResponse.json({ success: false, error: csrfError }, { status: 403 });
+    }
+
     const user = await getAuthenticatedHostUser(request);
     if (!user) {
       return NextResponse.json(
@@ -69,9 +75,9 @@ export async function POST(request: Request) {
         ? body.transferProof.trim().slice(0, 200)
         : '';
 
-    if (includeRedirect && redirectTargetUrl && !/^https?:\/\//i.test(redirectTargetUrl)) {
+    if (includeRedirect && redirectTargetUrl && !isSafeHttpUrl(redirectTargetUrl)) {
       return NextResponse.json(
-        { success: false, error: 'Redirect target URL must start with http:// or https://' },
+        { success: false, error: 'Redirect target URL must be a valid http:// or https:// URL' },
         { status: 400, headers: rlHeaders }
       );
     }
@@ -128,7 +134,9 @@ export async function POST(request: Request) {
       { headers: rlHeaders }
     );
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to submit bank transfer request';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to submit bank transfer request') },
+      { status: 500 }
+    );
   }
 }

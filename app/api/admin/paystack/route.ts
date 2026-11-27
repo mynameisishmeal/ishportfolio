@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server';
 import { isAdminAuthenticated } from '@/lib/auth';
 import { getPaystackConfig, updatePaystackConfig } from '@/lib/store';
 import { maskPaystackKey } from '@/lib/paystack';
+import { safeErrorMessage, verifySameOrigin } from '@/lib/security';
+
+export const dynamic = 'force-dynamic';
 
 function toSafePaystackResponse(cfg: Awaited<ReturnType<typeof getPaystackConfig>>) {
   return {
@@ -20,18 +23,25 @@ export async function GET() {
     const cfg = await getPaystackConfig();
     return NextResponse.json({ success: true, paystack: toSafePaystackResponse(cfg) });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to load Paystack settings';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to load Paystack settings') },
+      { status: 500 }
+    );
   }
 }
 
 export async function PUT(request: Request) {
   try {
+    const csrfError = verifySameOrigin(request);
+    if (csrfError) {
+      return NextResponse.json({ success: false, error: csrfError }, { status: 403 });
+    }
+
     if (!(await isAdminAuthenticated())) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const body = await request.json();
+    const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
     const current = await getPaystackConfig();
 
     const clearSecretKey = Boolean(body?.clearSecretKey);
@@ -74,7 +84,9 @@ export async function PUT(request: Request) {
       paystack: toSafePaystackResponse(saved),
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to save Paystack settings';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to save Paystack settings') },
+      { status: 500 }
+    );
   }
 }

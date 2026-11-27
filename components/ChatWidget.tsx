@@ -6,8 +6,6 @@ import { useStore } from '@/context/StoreContext';
 import { ChatMessage } from '@/lib/types';
 
 const CHAT_STORAGE_KEY = 'ish_chat_state_v1';
-const CHAT_COOKIE_NAME = 'ish_chat_id';
-const CHAT_COOKIE_MAX_AGE = 60 * 60 * 24 * 365; // 1 year
 const CHAT_ID_PATTERN = /^[a-zA-Z0-9_-]{8,80}$/;
 
 interface LocalChatMessage extends ChatMessage {
@@ -33,28 +31,6 @@ function makeRandomId(prefix: string): string {
 
 function isValidId(value?: string | null): value is string {
   return Boolean(value && CHAT_ID_PATTERN.test(value.trim()));
-}
-
-function readCookie(name: string): string | null {
-  if (typeof document === 'undefined' || !document.cookie) return null;
-  const parts = document.cookie.split('; ');
-  for (const part of parts) {
-    const eqIdx = part.indexOf('=');
-    if (eqIdx === -1) continue;
-    const key = decodeURIComponent(part.slice(0, eqIdx));
-    if (key === name) {
-      return decodeURIComponent(part.slice(eqIdx + 1));
-    }
-  }
-  return null;
-}
-
-function writeVisitorCookie(chatId: string): void {
-  if (typeof document === 'undefined') return;
-  const secureFlag = window.location.protocol === 'https:' ? '; Secure' : '';
-  document.cookie = `${encodeURIComponent(CHAT_COOKIE_NAME)}=${encodeURIComponent(
-    chatId
-  )}; Max-Age=${CHAT_COOKIE_MAX_AGE}; Path=/; SameSite=Lax${secureFlag}`;
 }
 
 function readLocalState(): StoredChatState | null {
@@ -121,13 +97,9 @@ export default function ChatWidget() {
   );
   const unreadReplies = Math.max(0, adminMessageCount - lastSeenAdminCount);
 
-  const persist = useCallback(
-    (next: StoredChatState) => {
-      writeVisitorCookie(next.chatId);
-      writeLocalState(next);
-    },
-    []
-  );
+  const persist = useCallback((next: StoredChatState) => {
+    writeLocalState(next);
+  }, []);
 
   const flushPendingMessages = useCallback(
     async (activeChatId: string, pendingList: LocalChatMessage[]) => {
@@ -171,16 +143,20 @@ export default function ChatWidget() {
   );
 
   const syncFromServer = useCallback(
-    async (activeChatId: string) => {
-      if (!activeChatId) return;
+    async () => {
       try {
-        const res = await fetch(`/api/chat?chatId=${encodeURIComponent(activeChatId)}`, {
+        const res = await fetch('/api/chat', {
           cache: 'no-store',
         });
         const data = await res.json();
         if (!res.ok || !data?.success) {
           setSyncState('offline');
           return;
+        }
+
+        const serverChatId = isValidId(data.chatId) ? data.chatId : '';
+        if (serverChatId) {
+          setChatId(prev => (prev === serverChatId ? prev : serverChatId));
         }
 
         setSyncState('synced');
@@ -203,12 +179,12 @@ export default function ChatWidget() {
             setVisitorName(data.thread.visitorName);
           }
 
-          if (localPending.length > 0) {
-            void flushPendingMessages(activeChatId, localPending);
+          if (localPending.length > 0 && serverChatId) {
+            void flushPendingMessages(serverChatId, localPending);
           }
-        } else if (messagesRef.current.some(m => m.pending)) {
+        } else if (messagesRef.current.some(m => m.pending) && serverChatId) {
           const pendingOnly = messagesRef.current.filter(m => m.pending);
-          void flushPendingMessages(activeChatId, pendingOnly);
+          void flushPendingMessages(serverChatId, pendingOnly);
         }
       } catch {
         setSyncState('offline');
@@ -217,14 +193,10 @@ export default function ChatWidget() {
     [flushPendingMessages]
   );
 
-  // Hydrate identity & chat history from both localStorage and cookie on mount
+  // Hydrate cached chat state from localStorage, then sync authoritative signed session from server
   useEffect(() => {
     const local = readLocalState();
-    const cookieId = readCookie(CHAT_COOKIE_NAME);
-    const resolvedId =
-      (local && isValidId(local.chatId) && local.chatId) ||
-      (isValidId(cookieId) && cookieId) ||
-      makeRandomId('chat');
+    const resolvedId = (local && isValidId(local.chatId) && local.chatId) || makeRandomId('chat');
 
     const initialName = local?.visitorName || '';
     const initialMessages = local?.messages || [];
@@ -245,7 +217,7 @@ export default function ChatWidget() {
     });
     setHydrated(true);
 
-    void syncFromServer(resolvedId);
+    void syncFromServer();
   }, [persist, syncFromServer]);
 
   // Persist every message/name/seen-count update to both localStorage and cookie
@@ -280,11 +252,11 @@ export default function ChatWidget() {
 
     const intervalMs = isOpen ? 5000 : 15000;
     const timer = window.setInterval(() => {
-      void syncFromServer(chatId);
+      void syncFromServer();
     }, intervalMs);
 
     const onFocus = () => {
-      void syncFromServer(chatId);
+      void syncFromServer();
     };
     window.addEventListener('focus', onFocus);
 
@@ -507,7 +479,7 @@ export default function ChatWidget() {
           onClick={() => {
             setIsOpen(true);
             setLastSeenAdminCount(adminMessageCount);
-            if (chatId) void syncFromServer(chatId);
+            void syncFromServer();
           }}
           aria-label={`Open live chat with ${ownerName}`}
           className="relative flex items-center gap-2 rounded-full bg-amber-400 px-4 py-2.5 text-xs font-semibold text-zinc-950 shadow-lg shadow-amber-400/25 ring-1 ring-amber-300/60 transition-transform hover:scale-[1.03] hover:bg-amber-300 active:scale-[0.98]"

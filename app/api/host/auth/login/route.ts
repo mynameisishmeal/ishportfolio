@@ -6,12 +6,18 @@ import {
   HOST_SESSION_TTL_MS,
   signHostSessionCookie,
 } from '@/lib/host-auth';
-import { checkRateLimit, getClientIp, rateLimitHeaders } from '@/lib/rate-limit';
+import { checkPersistentRateLimit, getClientIp, rateLimitHeaders } from '@/lib/rate-limit';
+import { safeErrorMessage, verifySameOrigin } from '@/lib/security';
 
 export async function POST(request: Request) {
   try {
+    const csrfError = verifySameOrigin(request);
+    if (csrfError) {
+      return NextResponse.json({ success: false, error: csrfError }, { status: 403 });
+    }
+
     const ip = getClientIp(request);
-    const rate = checkRateLimit({
+    const rate = await checkPersistentRateLimit({
       namespace: 'host-key-login',
       key: ip,
       maxRequests: 12,
@@ -28,7 +34,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = await request.json();
+    const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
     const rawKey = typeof body?.accessKey === 'string' ? body.accessKey.trim() : '';
 
     if (rawKey.length < 10) {
@@ -54,10 +60,7 @@ export async function POST(request: Request) {
       request.url.startsWith('https://') ||
       request.headers.get('x-forwarded-proto') === 'https';
 
-    const res = NextResponse.json(
-      { success: true, user, sessionToken: token },
-      { headers: rlHeaders }
-    );
+    const res = NextResponse.json({ success: true, user }, { headers: rlHeaders });
     res.cookies.set(HOST_COOKIE_NAME, token, {
       httpOnly: true,
       sameSite: 'lax',
@@ -67,7 +70,9 @@ export async function POST(request: Request) {
     });
     return res;
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Key login failed';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Key login failed') },
+      { status: 500 }
+    );
   }
 }

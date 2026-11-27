@@ -88,3 +88,31 @@ export function generateNarrationCode(prefix: 'HBT' | 'OBT' = 'HBT'): string {
   }
   return `${prefix}-${suffix}`;
 }
+
+export function isSafeHttpUrl(raw?: string | null): boolean {
+  if (!raw || typeof raw !== 'string') return false;
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+export function toSafeHttpUrl(raw?: string | null): string | null {
+  if (!raw || typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  return isSafeHttpUrl(trimmed) ? trimmed : null;
+}
+
+export function isSafeImageUrl(raw?: string | null): boolean {
+  if (!raw || typeof raw !== 'string') return false;
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith('/') && !trimmed.startsWith('//')) {
+    return true;
+  }
+  return isSafeHttpUrl(trimmed);
+}

@@ -12,6 +12,9 @@ import {
   getPaystackConfig,
 } from '@/lib/store';
 import { DEFAULT_BANK_TRANSFER_CONFIG, DEFAULT_HOSTING_CONFIG } from '@/lib/data';
+import { safeErrorMessage } from '@/lib/security';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
   try {
@@ -73,7 +76,9 @@ export async function GET(request: Request) {
 
     return res;
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to load hosting status';
-    return NextResponse.json({ success: false, error: message }, { status: 503 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to load hosting status') },
+      { status: 503 }
+    );
   }
 }

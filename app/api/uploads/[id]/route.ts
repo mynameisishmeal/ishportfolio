@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
 import { getUploadById } from '@/lib/store';
+import { safeErrorMessage } from '@/lib/security';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET(
   _request: Request,
@@ -18,10 +21,14 @@ export async function GET(
       headers: {
         'Content-Type': upload.contentType,
         'Cache-Control': 'public, max-age=31536000, immutable',
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'none'; sandbox",
       },
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to load image';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to load image') },
+      { status: 500 }
+    );
   }
 }

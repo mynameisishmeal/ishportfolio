@@ -3,7 +3,7 @@
 import React, { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useStore } from '@/context/StoreContext';
-import { PROJECT_STATUS_META } from '@/lib/format';
+import { PROJECT_STATUS_META, toSafeHttpUrl } from '@/lib/format';
 import { ProjectItem, ProjectStatus } from '@/lib/types';
 import MotionReveal from './MotionReveal';
 import {
@@ -249,9 +249,9 @@ export default function ProjectsSection() {
                           className="flex items-center gap-2"
                           onClick={e => e.stopPropagation()}
                         >
-                          {project.repoUrl ? (
+                          {toSafeHttpUrl(project.repoUrl) ? (
                             <a
-                              href={project.repoUrl}
+                              href={toSafeHttpUrl(project.repoUrl)!}
                               target="_blank"
                               rel="noreferrer"
                               title="Source Repository"
@@ -260,9 +260,9 @@ export default function ProjectsSection() {
                               <Github className="h-3.5 w-3.5" />
                             </a>
                           ) : null}
-                          {project.liveUrl ? (
+                          {toSafeHttpUrl(project.liveUrl) ? (
                             <a
-                              href={project.liveUrl}
+                              href={toSafeHttpUrl(project.liveUrl)!}
                               target="_blank"
                               rel="noreferrer"
                               title="Live Demo"
@@ -426,11 +426,11 @@ export default function ProjectsSection() {
               </div>
             )}
 
-            {(selectedProject.liveUrl || selectedProject.repoUrl) && (
+            {(toSafeHttpUrl(selectedProject.liveUrl) || toSafeHttpUrl(selectedProject.repoUrl)) && (
               <div className="mt-7 flex flex-wrap gap-3 border-t border-white/10 pt-5">
-                {selectedProject.liveUrl ? (
+                {toSafeHttpUrl(selectedProject.liveUrl) ? (
                   <a
-                    href={selectedProject.liveUrl}
+                    href={toSafeHttpUrl(selectedProject.liveUrl)!}
                     target="_blank"
                     rel="noreferrer"
                     className="inline-flex items-center gap-2 rounded-xl bg-amber-400 px-4 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-amber-300"
@@ -439,9 +439,9 @@ export default function ProjectsSection() {
                     <ArrowUpRight className="h-4 w-4" />
                   </a>
                 ) : null}
-                {selectedProject.repoUrl ? (
+                {toSafeHttpUrl(selectedProject.repoUrl) ? (
                   <a
-                    href={selectedProject.repoUrl}
+                    href={toSafeHttpUrl(selectedProject.repoUrl)!}
                     target="_blank"
                     rel="noreferrer"
                     className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-200 transition hover:bg-white/[0.08]"

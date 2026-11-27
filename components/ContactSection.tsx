@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { useStore } from '@/context/StoreContext';
+import { toSafeHttpUrl } from '@/lib/format';
 import MotionReveal from './MotionReveal';
 import { CheckCircle2, Github, Mail, MessageSquare, Send } from 'lucide-react';
 
@@ -80,10 +81,10 @@ export default function ContactSection() {
                 </MotionReveal>
               ) : null}
 
-              {profile.githubUrl ? (
+              {toSafeHttpUrl(profile.githubUrl) ? (
                 <MotionReveal mode="scroll" delay={0.12}>
                   <a
-                    href={profile.githubUrl}
+                    href={toSafeHttpUrl(profile.githubUrl)!}
                     target="_blank"
                     rel="noreferrer"
                     className="flex items-center gap-3 rounded-xl border border-white/[0.08] bg-zinc-900/60 p-4 transition hover:border-white/20"

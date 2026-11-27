@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { formatPrice } from '@/lib/format';
+import { formatPrice, toSafeHttpUrl } from '@/lib/format';
 import { HostingConfig, HostingRequest, HostingStatus } from '@/lib/types';
 import {
   CheckCircle2,
@@ -671,9 +671,9 @@ export default function HostRequestsManager() {
                 </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  {reqItem.liveUrl ? (
+                  {toSafeHttpUrl(reqItem.liveUrl) ? (
                     <a
-                      href={reqItem.liveUrl}
+                      href={toSafeHttpUrl(reqItem.liveUrl)!}
                       target="_blank"
                       rel="noreferrer"
                       className="inline-flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300"

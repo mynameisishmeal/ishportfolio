@@ -9,18 +9,24 @@ import {
   signHostSessionCookie,
 } from '@/lib/host-auth';
 import {
-  checkRateLimit,
+  checkPersistentRateLimit,
   detectBotPayload,
   getClientIp,
   rateLimitHeaders,
 } from '@/lib/rate-limit';
+import { safeErrorMessage, verifySameOrigin } from '@/lib/security';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export async function POST(request: Request) {
   try {
+    const csrfError = verifySameOrigin(request);
+    if (csrfError) {
+      return NextResponse.json({ success: false, error: csrfError }, { status: 403 });
+    }
+
     const ip = getClientIp(request);
-    const rate = checkRateLimit({
+    const rate = await checkPersistentRateLimit({
       namespace: 'host-key-create',
       key: ip,
       maxRequests: 8,
@@ -71,10 +77,7 @@ export async function POST(request: Request) {
       request.url.startsWith('https://') ||
       request.headers.get('x-forwarded-proto') === 'https';
 
-    const res = NextResponse.json(
-      { success: true, user, accessKey, sessionToken: token },
-      { headers: rlHeaders }
-    );
+    const res = NextResponse.json({ success: true, user, accessKey }, { headers: rlHeaders });
     res.cookies.set(HOST_COOKIE_NAME, token, {
       httpOnly: true,
       sameSite: 'lax',
@@ -84,7 +87,9 @@ export async function POST(request: Request) {
     });
     return res;
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to create access key';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to create access key') },
+      { status: 500 }
+    );
   }
 }

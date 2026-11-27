@@ -68,6 +68,7 @@ export interface Order {
   notes?: string;
   createdAt: string;
   status: OrderStatus;
+  stockRestored?: boolean;
 }
 
 export interface ContactMessage {
@@ -202,6 +203,7 @@ export interface HostingRequest {
 export interface AdminSettings {
   masterPin: string;
   sessionSecret: string;
+  adminSessionSecret?: string;
   telegram?: TelegramConfig;
   paystack?: PaystackConfig;
   bankTransfer?: BankTransferConfig;

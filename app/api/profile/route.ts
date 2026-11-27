@@ -1,25 +1,49 @@
 import { NextResponse } from 'next/server';
 import { getProfile, updateProfile } from '@/lib/store';
 import { isAdminAuthenticated } from '@/lib/auth';
-import { normalizeFontScale } from '@/lib/format';
+import { isSafeHttpUrl, normalizeFontScale } from '@/lib/format';
+import { safeErrorMessage, verifySameOrigin } from '@/lib/security';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
     const profile = await getProfile();
     return NextResponse.json({ success: true, profile });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to fetch profile';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to fetch profile') },
+      { status: 500 }
+    );
   }
 }
 
 export async function PUT(request: Request) {
   try {
+    const csrfError = verifySameOrigin(request);
+    if (csrfError) {
+      return NextResponse.json({ success: false, error: csrfError }, { status: 403 });
+    }
+
     if (!(await isAdminAuthenticated())) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const body = await request.json();
+    const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
+    if (!body) {
+      return NextResponse.json({ success: false, error: 'Invalid request body.' }, { status: 400 });
+    }
+
+    for (const field of ['githubUrl', 'xUrl', 'linkedinUrl'] as const) {
+      const val = body[field];
+      if (typeof val === 'string' && val.trim() && !isSafeHttpUrl(val)) {
+        return NextResponse.json(
+          { success: false, error: `${field} must be a valid http:// or https:// URL.` },
+          { status: 400 }
+        );
+      }
+    }
+
     const updated = await updateProfile({
       ...(typeof body.name === 'string' && { name: body.name.trim() }),
       ...(typeof body.brandTitle === 'string' && { brandTitle: body.brandTitle.trim() }),
@@ -45,7 +69,9 @@ export async function PUT(request: Request) {
 
     return NextResponse.json({ success: true, profile: updated });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to update profile';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to update profile') },
+      { status: 500 }
+    );
   }
 }

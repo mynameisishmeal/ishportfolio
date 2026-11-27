@@ -3,7 +3,7 @@
 import React, { useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useStore } from '@/context/StoreContext';
-import { PROJECT_STATUS_META } from '@/lib/format';
+import { PROJECT_STATUS_META, toSafeHttpUrl } from '@/lib/format';
 import { ProjectItem, ProjectStatus } from '@/lib/types';
 import ImageUploadField from './ImageUploadField';
 import {
@@ -483,9 +483,9 @@ export default function ProjectsManager() {
                   </div>
 
                   <div className="flex items-center gap-2 self-end sm:self-auto">
-                    {proj.liveUrl ? (
+                    {toSafeHttpUrl(proj.liveUrl) ? (
                       <a
-                        href={proj.liveUrl}
+                        href={toSafeHttpUrl(proj.liveUrl)!}
                         target="_blank"
                         rel="noreferrer"
                         className="rounded-lg border border-white/10 p-2 text-zinc-400 hover:text-white"
@@ -494,9 +494,9 @@ export default function ProjectsManager() {
                         <ExternalLink className="h-3.5 w-3.5" />
                       </a>
                     ) : null}
-                    {proj.repoUrl ? (
+                    {toSafeHttpUrl(proj.repoUrl) ? (
                       <a
-                        href={proj.repoUrl}
+                        href={toSafeHttpUrl(proj.repoUrl)!}
                         target="_blank"
                         rel="noreferrer"
                         className="rounded-lg border border-white/10 p-2 text-zinc-400 hover:text-white"

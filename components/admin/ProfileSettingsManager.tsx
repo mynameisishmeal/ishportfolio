@@ -1040,12 +1040,12 @@ export default function ProfileSettingsManager() {
           </div>
           <div>
             <label className="mb-1.5 block text-xs font-medium text-zinc-300">
-              New PIN (min 4 characters)
+              New PIN (min 6 characters)
             </label>
             <input
               type="password"
               required
-              minLength={4}
+              minLength={6}
               value={newPin}
               onChange={e => setNewPin(e.target.value)}
               className="w-full rounded-xl border border-white/10 bg-zinc-950 px-3.5 py-2 text-sm text-zinc-100 outline-none focus:border-amber-400/60"

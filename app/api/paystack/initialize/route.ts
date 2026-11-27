@@ -13,18 +13,17 @@ import {
   getClientIp,
   rateLimitHeaders,
 } from '@/lib/rate-limit';
+import { resolveSafeOrigin, safeErrorMessage, verifySameOrigin } from '@/lib/security';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-function resolveRequestOrigin(request: Request): string {
-  const url = new URL(request.url);
-  const proto = request.headers.get('x-forwarded-proto') || url.protocol.replace(':', '');
-  const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || url.host;
-  return `${proto}://${host}`;
-}
-
 export async function POST(request: Request) {
   try {
+    const csrfError = verifySameOrigin(request);
+    if (csrfError) {
+      return NextResponse.json({ success: false, error: csrfError }, { status: 403 });
+    }
+
     const user = await getAuthenticatedHostUser(request);
     if (!user) {
       return NextResponse.json(
@@ -67,9 +66,9 @@ export async function POST(request: Request) {
       (typeof body?.customerEmail === 'string' ? body.customerEmail.trim() : '') || user.email;
     const notes = typeof body?.notes === 'string' ? body.notes.trim() : '';
 
-    if (!items.length || !customerEmail) {
+    if (!items.length || items.length > 50 || !customerEmail) {
       return NextResponse.json(
-        { success: false, error: 'Please select at least one item to pay.' },
+        { success: false, error: 'Please select between 1 and 50 items to pay.' },
         { status: 400, headers: rlHeaders }
       );
     }
@@ -129,7 +128,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const origin = resolveRequestOrigin(request);
+    const origin = resolveSafeOrigin(request);
     const callbackUrl = `${origin}/?paystack_ref=${encodeURIComponent(paymentReference)}`;
 
     const init = await initializePaystackTransaction({
@@ -164,7 +163,9 @@ export async function POST(request: Request) {
       { headers: rlHeaders }
     );
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to initialize Paystack checkout';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to initialize Paystack checkout') },
+      { status: 500 }
+    );
   }
 }

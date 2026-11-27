@@ -11,6 +11,9 @@ import {
   getPaystackConfig,
 } from '@/lib/store';
 import { DEFAULT_BANK_TRANSFER_CONFIG } from '@/lib/data';
+import { safeErrorMessage } from '@/lib/security';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET(request: Request) {
   try {
@@ -61,7 +64,9 @@ export async function GET(request: Request) {
 
     return res;
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to load shop session';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to load shop session') },
+      { status: 500 }
+    );
   }
 }

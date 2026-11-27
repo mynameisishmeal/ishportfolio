@@ -1,12 +1,18 @@
 import { NextResponse } from 'next/server';
 import { getSettings } from '@/lib/store';
 import { ADMIN_COOKIE_NAME, createAdminSessionToken } from '@/lib/auth';
-import { checkRateLimit, getClientIp, rateLimitHeaders } from '@/lib/rate-limit';
+import { checkPersistentRateLimit, getClientIp, rateLimitHeaders } from '@/lib/rate-limit';
+import { safeErrorMessage, verifyPin, verifySameOrigin } from '@/lib/security';
 
 export async function POST(request: Request) {
   try {
+    const csrfError = verifySameOrigin(request);
+    if (csrfError) {
+      return NextResponse.json({ success: false, error: csrfError }, { status: 403 });
+    }
+
     const ip = getClientIp(request);
-    const rate = checkRateLimit({
+    const rate = await checkPersistentRateLimit({
       namespace: 'admin-login',
       key: ip,
       maxRequests: 8,
@@ -23,7 +29,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const body = await request.json();
+    const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
     const pin = typeof body?.pin === 'string' ? body.pin : '';
     const settings = await getSettings();
 
@@ -37,10 +43,10 @@ export async function POST(request: Request) {
       );
     }
 
-    if (!pin || pin !== settings.masterPin) {
+    if (!pin || !verifyPin(pin, settings.masterPin)) {
       return NextResponse.json(
         { success: false, error: 'Incorrect PIN.' },
-        { status: 401 }
+        { status: 401, headers: rlHeaders }
       );
     }
 
@@ -49,7 +55,7 @@ export async function POST(request: Request) {
       request.headers.get('x-forwarded-proto') === 'https';
 
     const token = await createAdminSessionToken();
-    const response = NextResponse.json({ success: true });
+    const response = NextResponse.json({ success: true }, { headers: rlHeaders });
     response.cookies.set(ADMIN_COOKIE_NAME, token, {
       httpOnly: true,
       sameSite: 'lax',
@@ -59,7 +65,9 @@ export async function POST(request: Request) {
     });
     return response;
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Login failed';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Login failed') },
+      { status: 500 }
+    );
   }
 }

@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { useStore } from '@/context/StoreContext';
-import { formatPrice, generateNarrationCode } from '@/lib/format';
+import { formatPrice, generateNarrationCode, toSafeHttpUrl } from '@/lib/format';
 import {
   HOST_CACHE_KEY,
   hostAuthHeaders,
@@ -195,49 +195,17 @@ export default function HostSection() {
     void loadState();
   }, [accountUser?.id, loadState]);
 
-  // Verify Paystack return callback (?host_ref=HPSK-...)
+  // Refresh hosting workspace when PaystackReturnHandler confirms a hosting payment
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const url = new URL(window.location.href);
-    const ref = url.searchParams.get('host_ref');
-    if (!ref || !ref.startsWith('HPSK-')) return;
-
-    let active = true;
-    (async () => {
-      try {
-        const res = await fetch(
-          `/api/host/pay/verify?reference=${encodeURIComponent(ref)}`,
-          { cache: 'no-store', headers: hostAuthHeaders() }
-        );
-        const data = await res.json();
-        url.searchParams.delete('host_ref');
-        url.searchParams.delete('trxref');
-        url.searchParams.delete('reference');
-        window.history.replaceState(null, '', url.pathname + url.search + '#host');
-
-        if (!active) return;
-        if (res.ok && data?.success && data?.verified) {
-          setPayMsg({
-            type: 'ok',
-            text: 'Payment confirmed! Upload your project .zip folder below.',
-          });
-          void loadState();
-        } else {
-          setPayMsg({
-            type: 'err',
-            text: data?.error || 'Could not confirm Paystack payment.',
-          });
-        }
-      } catch {
-        if (active) {
-          setPayMsg({ type: 'err', text: 'Network error confirming Paystack payment.' });
-        }
-      }
-    })();
-
-    return () => {
-      active = false;
+    const onHostUpdated = () => {
+      setPayMsg({
+        type: 'ok',
+        text: 'Payment confirmed! Upload your project .zip folder below.',
+      });
+      void loadState();
     };
+    window.addEventListener('ish:host-updated', onHostUpdated);
+    return () => window.removeEventListener('ish:host-updated', onHostUpdated);
   }, [loadState]);
 
   // Light poll when awaiting payment verification or admin review / link share
@@ -384,34 +352,119 @@ export default function HostSection() {
     });
 
     try {
-      const fd = new FormData();
-      fd.append('requestId', reqItem.id);
-      fd.append('projectName', reqItem.projectName);
-      fd.append('notes', reqItem.notes || '');
-      fd.append('file', file);
-
-      const res = await fetch('/api/host/upload', {
-        method: 'POST',
-        headers: hostAuthHeaders(),
-        body: fd,
-      });
-      const data = await res.json();
-      if (!res.ok || !data?.success) {
+      const CHUNK_SIZE = 3 * 1024 * 1024; // 3 MB per request (safe under Vercel's 4.5 MB limit)
+      const MAX_ZIP_SIZE = 50 * 1024 * 1024;
+      if (file.size <= 0 || file.size > MAX_ZIP_SIZE) {
         setUploadMsg(prev => ({
           ...prev,
-          [reqItem.id]: { type: 'err', text: data?.error || 'Upload failed.' },
+          [reqItem.id]: { type: 'err', text: 'ZIP file must be between 1 byte and 50 MB.' },
         }));
-      } else {
-        setSelectedFiles(prev => ({ ...prev, [reqItem.id]: null }));
-        setUploadMsg(prev => ({
-          ...prev,
-          [reqItem.id]: {
-            type: 'ok',
-            text: 'ZIP uploaded! Admin has been notified and will share your live link here shortly.',
-          },
-        }));
-        await loadState();
+        return;
       }
+
+      if (file.size <= CHUNK_SIZE) {
+        const fd = new FormData();
+        fd.append('requestId', reqItem.id);
+        fd.append('projectName', reqItem.projectName);
+        fd.append('notes', reqItem.notes || '');
+        fd.append('file', file);
+
+        const res = await fetch('/api/host/upload', {
+          method: 'POST',
+          headers: hostAuthHeaders(),
+          body: fd,
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok || !data?.success) {
+          setUploadMsg(prev => ({
+            ...prev,
+            [reqItem.id]: {
+              type: 'err',
+              text: data?.error || `Upload failed (HTTP ${res.status}).`,
+            },
+          }));
+          return;
+        }
+      } else {
+        const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+        const uploadId =
+          typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+            ? `hup-${crypto.randomUUID()}`
+            : `hup-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+        for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex += 1) {
+          const start = chunkIndex * CHUNK_SIZE;
+          const end = Math.min(file.size, start + CHUNK_SIZE);
+          const slice = file.slice(start, end);
+
+          const fd = new FormData();
+          fd.append('mode', 'chunk');
+          fd.append('uploadId', uploadId);
+          fd.append('requestId', reqItem.id);
+          fd.append('fileName', file.name);
+          fd.append('chunkIndex', String(chunkIndex));
+          fd.append('totalChunks', String(totalChunks));
+          fd.append('chunk', slice, file.name);
+
+          const chunkRes = await fetch('/api/host/upload', {
+            method: 'POST',
+            headers: hostAuthHeaders(),
+            body: fd,
+          });
+          const chunkData = await chunkRes.json().catch(() => null);
+          if (!chunkRes.ok || !chunkData?.success) {
+            setUploadMsg(prev => ({
+              ...prev,
+              [reqItem.id]: {
+                type: 'err',
+                text: chunkData?.error || `Chunk upload failed (HTTP ${chunkRes.status}).`,
+              },
+            }));
+            return;
+          }
+
+          const pct = Math.min(99, Math.round(((chunkIndex + 1) / totalChunks) * 100));
+          setUploadMsg(prev => ({
+            ...prev,
+            [reqItem.id]: { type: 'ok', text: `Uploading ZIP... ${pct}%` },
+          }));
+        }
+
+        const finRes = await fetch('/api/host/upload', {
+          method: 'POST',
+          headers: hostAuthHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({
+            mode: 'finalize',
+            uploadId,
+            requestId: reqItem.id,
+            totalChunks,
+            fileName: file.name,
+            projectName: reqItem.projectName,
+            notes: reqItem.notes || '',
+          }),
+        });
+        const finData = await finRes.json().catch(() => null);
+        if (!finRes.ok || !finData?.success) {
+          setUploadMsg(prev => ({
+            ...prev,
+            [reqItem.id]: {
+              type: 'err',
+              text: finData?.error || `Could not finalize upload (HTTP ${finRes.status}).`,
+            },
+          }));
+          return;
+        }
+      }
+
+      setSelectedFiles(prev => ({ ...prev, [reqItem.id]: null }));
+      setUploadMsg(prev => ({
+        ...prev,
+        [reqItem.id]: {
+          type: 'ok',
+          text: 'ZIP uploaded! Admin has been notified and will share your live link here shortly.',
+        },
+      }));
+      await loadState();
     } catch {
       setUploadMsg(prev => ({
         ...prev,
@@ -1008,7 +1061,7 @@ export default function HostSection() {
                             </div>
                           ) : null}
 
-                          {reqItem.liveUrl ? (
+                          {toSafeHttpUrl(reqItem.liveUrl) ? (
                             <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4">
                               <div className="flex items-center gap-2 text-xs font-semibold text-emerald-300">
                                 <CheckCircle2 className="h-4 w-4" />
@@ -1016,7 +1069,7 @@ export default function HostSection() {
                               </div>
                               <div className="mt-2 flex flex-wrap items-center gap-2">
                                 <a
-                                  href={reqItem.liveUrl}
+                                  href={toSafeHttpUrl(reqItem.liveUrl)!}
                                   target="_blank"
                                   rel="noreferrer"
                                   className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-400 px-3 py-1.5 text-xs font-semibold text-zinc-950 transition hover:bg-emerald-300"

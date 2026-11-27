@@ -76,18 +76,12 @@ export async function verifyHostSessionCookie(
   }
 }
 
-export async function getAuthenticatedHostSession(request?: Request): Promise<{
+export async function getAuthenticatedHostSession(_request?: Request): Promise<{
   sessionId: string;
   user: PublicHostUser;
 } | null> {
   const cookieStore = await cookies();
-  const cookieToken = cookieStore.get(HOST_COOKIE_NAME)?.value;
-  const headerToken =
-    request?.headers.get('x-host-session')?.trim() ||
-    request?.headers.get('authorization')?.replace(/^Bearer\s+/i, '').trim() ||
-    undefined;
-
-  const token = cookieToken || headerToken;
+  const token = cookieStore.get(HOST_COOKIE_NAME)?.value;
   const sessionId = await verifyHostSessionCookie(token);
   if (!sessionId) return null;
 

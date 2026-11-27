@@ -3,30 +3,40 @@ import { NextResponse } from 'next/server';
 import {
   generateChatId,
   getChatById,
+  getSettings,
   sanitizeChatId,
   sendVisitorChatMessage,
 } from '@/lib/store';
 import {
   checkMultiRateLimit,
+  checkRateLimit,
   detectBotPayload,
   getClientIp,
   rateLimitHeaders,
 } from '@/lib/rate-limit';
 import { notifyChatToTelegram } from '@/lib/telegram';
+import {
+  safeErrorMessage,
+  signVisitorChatToken,
+  verifySameOrigin,
+  verifyVisitorChatToken,
+} from '@/lib/security';
 
-const VISITOR_CHAT_COOKIE = 'ish_chat_id';
+export const dynamic = 'force-dynamic';
+
+const VISITOR_CHAT_COOKIE = 'ish_chat_token';
 const ONE_YEAR_SECONDS = 60 * 60 * 24 * 365;
 
 function attachVisitorCookie(
   response: NextResponse,
-  chatId: string,
+  signedToken: string,
   request: Request
 ): NextResponse {
   const isHttps =
     request.headers.get('x-forwarded-proto') === 'https' ||
     request.url.startsWith('https://');
-  response.cookies.set(VISITOR_CHAT_COOKIE, chatId, {
-    httpOnly: false,
+  response.cookies.set(VISITOR_CHAT_COOKIE, signedToken, {
+    httpOnly: true,
     sameSite: 'lax',
     secure: isHttps,
     path: '/',
@@ -35,56 +45,69 @@ function attachVisitorCookie(
   return response;
 }
 
-export async function GET(request: Request) {
+async function resolveVerifiedChatIdentity(): Promise<{
+  chatId: string;
+  signedToken: string;
+}> {
   const cookieStore = await cookies();
-  const url = new URL(request.url);
-  const queryId = sanitizeChatId(url.searchParams.get('chatId'));
-  const cookieId = sanitizeChatId(cookieStore.get(VISITOR_CHAT_COOKIE)?.value);
-  const chatId = queryId || cookieId || generateChatId();
+  const { sessionSecret } = await getSettings();
+  const rawToken = cookieStore.get(VISITOR_CHAT_COOKIE)?.value;
+  const verified = verifyVisitorChatToken(rawToken, sessionSecret);
+  const chatId = sanitizeChatId(verified) || generateChatId();
+  const signedToken = signVisitorChatToken(chatId, sessionSecret);
+  return { chatId, signedToken };
+}
 
+export async function GET(request: Request) {
   try {
-    const thread = await getChatById(chatId);
-    const res = NextResponse.json({
-      success: true,
-      chatId,
-      thread,
+    const ip = getClientIp(request);
+    const rate = checkRateLimit({
+      namespace: 'chat-read',
+      key: ip,
+      maxRequests: 60,
+      windowMs: 60_000,
     });
-    return attachVisitorCookie(res, chatId, request);
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to load chat';
+    const rlHeaders = rateLimitHeaders(rate);
+    if (!rate.allowed) {
+      return NextResponse.json(
+        { success: false, thread: null, error: 'Too many requests. Please slow down.' },
+        { status: 429, headers: rlHeaders }
+      );
+    }
+
+    const { chatId, signedToken } = await resolveVerifiedChatIdentity();
+    const thread = await getChatById(chatId);
     const res = NextResponse.json(
-      { success: false, chatId, thread: null, error: message },
+      {
+        success: true,
+        chatId,
+        thread,
+      },
+      { headers: rlHeaders }
+    );
+    return attachVisitorCookie(res, signedToken, request);
+  } catch (err: unknown) {
+    return NextResponse.json(
+      { success: false, thread: null, error: safeErrorMessage(err, 'Failed to load chat') },
       { status: 503 }
     );
-    return attachVisitorCookie(res, chatId, request);
   }
 }
 
 export async function POST(request: Request) {
-  const cookieStore = await cookies();
-  const cookieId = sanitizeChatId(cookieStore.get(VISITOR_CHAT_COOKIE)?.value);
-  let resolvedChatId = cookieId || '';
-
   try {
+    const csrfError = verifySameOrigin(request);
+    if (csrfError) {
+      return NextResponse.json({ success: false, error: csrfError }, { status: 403 });
+    }
+
     const ip = getClientIp(request);
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
 
     const botError = detectBotPayload(body);
     if (botError) {
-      const chatId = resolvedChatId || generateChatId();
-      return attachVisitorCookie(
-        NextResponse.json({ success: false, chatId, error: botError }, { status: 400 }),
-        chatId,
-        request
-      );
+      return NextResponse.json({ success: false, error: botError }, { status: 400 });
     }
-
-    const text = typeof body?.text === 'string' ? body.text.trim() : '';
-    const visitorName = typeof body?.visitorName === 'string' ? body.visitorName.trim() : '';
-    const bodyChatId = sanitizeChatId(typeof body?.chatId === 'string' ? body.chatId : undefined);
-    const messageId = typeof body?.messageId === 'string' ? body.messageId : undefined;
-    const chatId = bodyChatId || cookieId || generateChatId();
-    resolvedChatId = chatId;
 
     const rate = checkMultiRateLimit([
       { namespace: 'chat-burst', key: ip, maxRequests: 10, windowMs: 60_000 },
@@ -92,19 +115,19 @@ export async function POST(request: Request) {
     ]);
     const rlHeaders = rateLimitHeaders(rate);
     if (!rate.allowed) {
-      return attachVisitorCookie(
-        NextResponse.json(
-          {
-            success: false,
-            chatId,
-            error: `Rate limit reached. Please wait ${rate.retryAfterSeconds}s before sending more messages.`,
-          },
-          { status: 429, headers: rlHeaders }
-        ),
-        chatId,
-        request
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Rate limit reached. Please wait ${rate.retryAfterSeconds}s before sending more messages.`,
+        },
+        { status: 429, headers: rlHeaders }
       );
     }
+
+    const { chatId, signedToken } = await resolveVerifiedChatIdentity();
+    const text = typeof body?.text === 'string' ? body.text.trim() : '';
+    const visitorName = typeof body?.visitorName === 'string' ? body.visitorName.trim() : '';
+    const messageId = typeof body?.messageId === 'string' ? body.messageId : undefined;
 
     if (!text) {
       return attachVisitorCookie(
@@ -112,7 +135,7 @@ export async function POST(request: Request) {
           { success: false, chatId, error: 'Message text is required.' },
           { status: 400, headers: rlHeaders }
         ),
-        chatId,
+        signedToken,
         request
       );
     }
@@ -138,17 +161,11 @@ export async function POST(request: Request) {
       },
       { headers: rlHeaders }
     );
-    return attachVisitorCookie(res, chatId, request);
+    return attachVisitorCookie(res, signedToken, request);
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to send message';
-    const fallbackChatId = resolvedChatId || generateChatId();
-    return attachVisitorCookie(
-      NextResponse.json(
-        { success: false, chatId: fallbackChatId, error: message },
-        { status: 503 }
-      ),
-      fallbackChatId,
-      request
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to send message') },
+      { status: 503 }
     );
   }
 }

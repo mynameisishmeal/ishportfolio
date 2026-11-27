@@ -10,13 +10,14 @@ function signPayload(payloadB64: string, secret: string): string {
 }
 
 export async function createAdminSessionToken(): Promise<string> {
-  const { sessionSecret } = await getSettings();
+  const settings = await getSettings();
+  const secret = settings.adminSessionSecret || settings.sessionSecret;
   const payload = JSON.stringify({
     role: 'admin',
     exp: Date.now() + SESSION_TTL_MS,
   });
   const payloadB64 = Buffer.from(payload, 'utf-8').toString('base64url');
-  const sig = signPayload(payloadB64, sessionSecret);
+  const sig = signPayload(payloadB64, secret);
   return `${payloadB64}.${sig}`;
 }
 
@@ -26,8 +27,9 @@ export async function verifyAdminSessionToken(token: string | undefined): Promis
   if (!payloadB64 || !providedSig) return false;
 
   try {
-    const { sessionSecret } = await getSettings();
-    const expectedSig = signPayload(payloadB64, sessionSecret);
+    const settings = await getSettings();
+    const secret = settings.adminSessionSecret || settings.sessionSecret;
+    const expectedSig = signPayload(payloadB64, secret);
     const a = Buffer.from(providedSig, 'utf-8');
     const b = Buffer.from(expectedSig, 'utf-8');
     if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {

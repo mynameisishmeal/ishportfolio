@@ -162,15 +162,28 @@ export async function getProfile(): Promise<SiteProfile> {
 export async function updateProfile(updates: Partial<SiteProfile>): Promise<SiteProfile> {
   const db = await readyDb();
   const current = await getProfile();
-  const next: SiteProfile = {
-    ...current,
-    ...updates,
-    skills: Array.isArray(updates.skills) ? updates.skills : current.skills,
-  };
-  await db
-    .collection<MetaDoc<SiteProfile>>('site_meta')
-    .updateOne({ _id: 'profile' }, { $set: { value: next } }, { upsert: true });
-  return next;
+  const patchFields: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(updates)) {
+    if (val === undefined) continue;
+    if (key === 'skills') {
+      if (Array.isArray(val)) patchFields['value.skills'] = val;
+    } else {
+      patchFields[`value.${key}`] = val;
+    }
+  }
+  if (Object.keys(patchFields).length === 0) {
+    return current;
+  }
+
+  const col = db.collection<MetaDoc<SiteProfile>>('site_meta');
+  // Ensure profile document exists before atomic field update
+  await col.updateOne({ _id: 'profile' }, { $setOnInsert: { value: current } }, { upsert: true });
+  const updated = await col.findOneAndUpdate(
+    { _id: 'profile' },
+    { $set: patchFields },
+    { returnDocument: 'after' }
+  );
+  return updated?.value ? { ...INITIAL_PROFILE, ...updated.value } : { ...current, ...updates };
 }
 
 // Projects
@@ -291,6 +304,20 @@ export async function getOrders(): Promise<Order[]> {
     .toArray();
 }
 
+const MAX_ORDER_ITEMS = 50;
+const MAX_ITEM_QUANTITY = 99;
+
+async function restoreOrderStock(db: Db, items: Order['items']): Promise<void> {
+  const prodCol = db.collection<Product>('products');
+  for (const item of items) {
+    if (!item?.productId || !Number.isFinite(item.quantity) || item.quantity <= 0) continue;
+    await prodCol.updateOne(
+      { id: item.productId, stock: { $gte: 0 } },
+      { $inc: { stock: Math.floor(item.quantity) } }
+    );
+  }
+}
+
 export async function createOrder(input: {
   userId?: string;
   keyHint?: string;
@@ -307,6 +334,24 @@ export async function createOrder(input: {
     return { error: 'Cart is empty.' };
   }
 
+  // Merge duplicate product lines and enforce safe bounds
+  const mergedMap = new Map<string, number>();
+  for (const rawItem of input.items) {
+    const pid = String(rawItem?.productId || '').trim();
+    if (!pid) continue;
+    const rawQty = Number(rawItem?.quantity);
+    const safeQty = Number.isFinite(rawQty) ? Math.max(1, Math.min(MAX_ITEM_QUANTITY, Math.floor(rawQty))) : 1;
+    const prev = mergedMap.get(pid) ?? 0;
+    mergedMap.set(pid, Math.min(MAX_ITEM_QUANTITY, prev + safeQty));
+    if (mergedMap.size > MAX_ORDER_ITEMS) {
+      return { error: `Too many distinct items in one order (max ${MAX_ORDER_ITEMS}).` };
+    }
+  }
+
+  if (mergedMap.size === 0) {
+    return { error: 'Cart is empty.' };
+  }
+
   const prodCol = db.collection<Product>('products');
   const deducted: { productId: string; quantity: number }[] = [];
   const resolvedItems: Order['items'] = [];
@@ -318,17 +363,16 @@ export async function createOrder(input: {
     }
   };
 
-  for (const item of input.items) {
+  for (const [productId, qty] of mergedMap.entries()) {
     const prod = await prodCol.findOne(
-      { id: item.productId, active: { $ne: false } },
+      { id: productId, active: { $ne: false } },
       { projection: { _id: 0 } }
     );
     if (!prod) {
       await rollbackStock();
-      return { error: `Product no longer available (${item.productId}).` };
+      return { error: `Product no longer available (${productId}).` };
     }
 
-    const qty = Math.max(1, Math.floor(Number(item.quantity) || 1));
     if (prod.stock >= 0) {
       const updatedProd = await prodCol.findOneAndUpdate(
         { id: prod.id, active: { $ne: false }, stock: { $gte: qty } },
@@ -352,9 +396,14 @@ export async function createOrder(input: {
     total += prod.price * qty;
   }
 
+  if (!Number.isFinite(total)) {
+    await rollbackStock();
+    return { error: 'Order total is invalid.' };
+  }
+
   const profile = await getProfile();
   const order: Order = {
-    id: `ORD-${Math.floor(100000 + Math.random() * 900000)}`,
+    id: `ORD-${crypto.randomBytes(4).toString('hex').toUpperCase()}`,
     ...(input.userId ? { userId: input.userId } : {}),
     ...(input.keyHint ? { keyHint: input.keyHint } : {}),
     items: resolvedItems,
@@ -364,14 +413,20 @@ export async function createOrder(input: {
     paymentMethod: input.paymentMethod || 'Direct / Invoice',
     ...(input.paymentStatus ? { paymentStatus: input.paymentStatus } : {}),
     ...(input.paymentReference ? { paymentReference: input.paymentReference } : {}),
-    customerName: input.customerName.trim(),
-    customerEmail: input.customerEmail.trim(),
-    notes: input.notes?.trim() || '',
+    customerName: input.customerName.trim().slice(0, 120),
+    customerEmail: input.customerEmail.trim().slice(0, 160),
+    notes: input.notes?.trim().slice(0, 1000) || '',
     createdAt: new Date().toISOString(),
     status: 'pending',
+    stockRestored: false,
   };
 
-  await db.collection<Order>('orders').insertOne({ ...order });
+  try {
+    await db.collection<Order>('orders').insertOne({ ...order });
+  } catch (err) {
+    await rollbackStock();
+    throw err;
+  }
   return { order };
 }
 
@@ -436,6 +491,7 @@ export async function updateOrderStatus(
   paymentStatus?: PaymentStatus
 ): Promise<Order | null> {
   const db = await readyDb();
+  const ordCol = db.collection<Order>('orders');
   const patch: Partial<Order> = {};
   if (status) {
     patch.status = status;
@@ -448,20 +504,38 @@ export async function updateOrderStatus(
   }
   if (Object.keys(patch).length === 0) return null;
 
-  const updated = await db
-    .collection<Order>('orders')
-    .findOneAndUpdate(
-      { id },
-      { $set: patch },
+  const shouldRestoreStock = status === 'cancelled' || paymentStatus === 'failed';
+  if (shouldRestoreStock) {
+    // Atomically mark stockRestored=true only once to prevent double restoration
+    const restored = await ordCol.findOneAndUpdate(
+      { id, stockRestored: { $ne: true } },
+      { $set: { ...patch, stockRestored: true } },
       { returnDocument: 'after', projection: { _id: 0 } }
     );
+    if (restored) {
+      await restoreOrderStock(db, restored.items);
+      return restored;
+    }
+  }
+
+  const updated = await ordCol.findOneAndUpdate(
+    { id },
+    { $set: patch },
+    { returnDocument: 'after', projection: { _id: 0 } }
+  );
   return updated ?? null;
 }
 
 export async function deleteOrder(id: string): Promise<boolean> {
   const db = await readyDb();
-  const res = await db.collection<Order>('orders').deleteOne({ id });
-  return res.deletedCount > 0;
+  const deleted = await db
+    .collection<Order>('orders')
+    .findOneAndDelete({ id }, { projection: { _id: 0 } });
+  if (!deleted) return false;
+  if (deleted.paymentStatus !== 'paid' && !deleted.stockRestored) {
+    await restoreOrderStock(db, deleted.items);
+  }
+  return true;
 }
 
 // Contact Messages
@@ -512,6 +586,7 @@ function normalizeSettings(raw?: Partial<AdminSettings>): AdminSettings {
   return {
     masterPin: raw?.masterPin || defaults.masterPin,
     sessionSecret: raw?.sessionSecret || defaults.sessionSecret,
+    ...(raw?.adminSessionSecret ? { adminSessionSecret: raw.adminSessionSecret } : {}),
     telegram: {
       ...DEFAULT_TELEGRAM_CONFIG,
       ...(raw?.telegram || {}),
@@ -546,11 +621,23 @@ export async function getSettings(): Promise<AdminSettings> {
 export async function updateSettings(updates: Partial<AdminSettings>): Promise<AdminSettings> {
   const db = await readyDb();
   const current = await getSettings();
-  const next: AdminSettings = normalizeSettings({ ...current, ...updates });
-  await db
-    .collection<MetaDoc<AdminSettings>>('site_meta')
-    .updateOne({ _id: 'settings' }, { $set: { value: next } }, { upsert: true });
-  return next;
+  const patchFields: Record<string, unknown> = {};
+  for (const [key, val] of Object.entries(updates)) {
+    if (val !== undefined) {
+      patchFields[`value.${key}`] = val;
+    }
+  }
+  if (Object.keys(patchFields).length === 0) {
+    return current;
+  }
+
+  const col = db.collection<MetaDoc<AdminSettings>>('site_meta');
+  const updated = await col.findOneAndUpdate(
+    { _id: 'settings' },
+    { $set: patchFields },
+    { returnDocument: 'after' }
+  );
+  return updated?.value ? normalizeSettings(updated.value) : normalizeSettings({ ...current, ...updates });
 }
 
 export async function getTelegramConfig(): Promise<TelegramConfig> {
@@ -840,6 +927,12 @@ async function ensureHostIndexes(db: Db) {
         db.collection('host_requests').createIndex({ id: 1 }, { unique: true }),
         db.collection('host_requests').createIndex({ userId: 1, updatedAt: -1 }),
         db.collection('host_requests').createIndex({ paymentReference: 1 }, { sparse: true }),
+        db
+          .collection('host_upload_chunks')
+          .createIndex({ uploadId: 1, chunkIndex: 1 }, { unique: true }),
+        db
+          .collection('host_upload_chunks')
+          .createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 }),
       ]);
     })().catch(err => {
       globalThis.__ishHostIndexV2Promise = undefined;
@@ -989,7 +1082,7 @@ export async function createHostingRequest(input: {
   const totalAmount = baseAmount + redirectFee;
 
   const req: HostingRequest = {
-    id: `HOST-${Math.floor(100000 + Math.random() * 900000)}`,
+    id: `HOST-${crypto.randomBytes(4).toString('hex').toUpperCase()}`,
     userId: input.user.id,
     userName: input.user.name,
     userEmail: input.user.email,
@@ -1170,6 +1263,243 @@ export async function attachHostingZipUpload(input: {
   }
 
   return { request: updated };
+}
+
+interface HostUploadChunkDoc {
+  uploadId: string;
+  requestId: string;
+  userId: string;
+  chunkIndex: number;
+  totalChunks: number;
+  data: Binary;
+  size: number;
+  expiresAt: Date;
+}
+
+const MAX_HOST_ZIP_BYTES = 50 * 1024 * 1024;
+const MAX_HOST_UPLOAD_CHUNKS = 25;
+
+export async function saveHostingZipChunk(input: {
+  uploadId: string;
+  requestId: string;
+  userId: string;
+  chunkIndex: number;
+  totalChunks: number;
+  chunkBuffer: Buffer;
+}): Promise<{ ok: boolean; error?: string }> {
+  const db = await readyDb();
+  await ensureHostIndexes(db);
+
+  if (
+    !Number.isInteger(input.chunkIndex) ||
+    !Number.isInteger(input.totalChunks) ||
+    input.totalChunks < 1 ||
+    input.totalChunks > MAX_HOST_UPLOAD_CHUNKS ||
+    input.chunkIndex < 0 ||
+    input.chunkIndex >= input.totalChunks
+  ) {
+    return { ok: false, error: 'Invalid upload chunk metadata.' };
+  }
+
+  const existing = await db
+    .collection<HostingRequest>('host_requests')
+    .findOne({ id: input.requestId }, { projection: { _id: 0 } });
+  if (!existing || existing.userId !== input.userId) {
+    return { ok: false, error: 'Hosting slot not found.' };
+  }
+  if (existing.paymentStatus !== 'paid') {
+    return { ok: false, error: 'Please complete payment before uploading your ZIP folder.' };
+  }
+  if (existing.hostingStatus === 'live') {
+    return {
+      ok: false,
+      error: 'This hosting slot is already live. Create a new paid slot to upload another project.',
+    };
+  }
+
+  if (
+    input.chunkIndex === 0 &&
+    (input.chunkBuffer.length < 4 ||
+      input.chunkBuffer[0] !== 0x50 ||
+      input.chunkBuffer[1] !== 0x4b)
+  ) {
+    return { ok: false, error: 'Uploaded file does not appear to be a valid ZIP archive.' };
+  }
+
+  const chunkCol = db.collection<HostUploadChunkDoc>('host_upload_chunks');
+  await chunkCol.updateOne(
+    { uploadId: input.uploadId, chunkIndex: input.chunkIndex },
+    {
+      $set: {
+        uploadId: input.uploadId,
+        requestId: input.requestId,
+        userId: input.userId,
+        chunkIndex: input.chunkIndex,
+        totalChunks: input.totalChunks,
+        data: new Binary(input.chunkBuffer),
+        size: input.chunkBuffer.length,
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+      },
+    },
+    { upsert: true }
+  );
+
+  return { ok: true };
+}
+
+export async function finalizeHostingZipChunks(input: {
+  uploadId: string;
+  requestId: string;
+  userId: string;
+  totalChunks: number;
+  fileName: string;
+  projectName?: string;
+  notes?: string;
+}): Promise<{ request?: HostingRequest; error?: string }> {
+  const db = await readyDb();
+  await ensureHostIndexes(db);
+  const col = db.collection<HostingRequest>('host_requests');
+  const chunkCol = db.collection<HostUploadChunkDoc>('host_upload_chunks');
+
+  try {
+    const existing = await col.findOne({ id: input.requestId }, { projection: { _id: 0 } });
+    if (!existing || existing.userId !== input.userId) {
+      return { error: 'Hosting slot not found.' };
+    }
+    if (existing.paymentStatus !== 'paid') {
+      return { error: 'Please complete payment before uploading your ZIP folder.' };
+    }
+    if (existing.hostingStatus === 'live') {
+      return {
+        error: 'This hosting slot is already live. Create a new paid slot to upload another project.',
+      };
+    }
+
+    const metaDocs = await chunkCol
+      .find(
+        { uploadId: input.uploadId, requestId: input.requestId, userId: input.userId },
+        { projection: { chunkIndex: 1, size: 1 } }
+      )
+      .sort({ chunkIndex: 1 })
+      .toArray();
+
+    if (metaDocs.length !== input.totalChunks) {
+      return { error: 'Upload incomplete — missing one or more chunks. Please retry.' };
+    }
+
+    let totalBytes = 0;
+    for (let i = 0; i < input.totalChunks; i += 1) {
+      if (metaDocs[i]?.chunkIndex !== i) {
+        return { error: 'Upload chunk sequence mismatch. Please retry.' };
+      }
+      totalBytes += Number(metaDocs[i]?.size || 0);
+    }
+
+    if (totalBytes <= 0 || totalBytes > MAX_HOST_ZIP_BYTES) {
+      return { error: 'ZIP file must be between 1 byte and 50 MB.' };
+    }
+
+    const bucket = new GridFSBucket(db, { bucketName: 'host_zips' });
+    const safeName = input.fileName.replace(/[^a-zA-Z0-9._-]/g, '_') || 'project.zip';
+
+    // Stream each chunk sequentially into GridFS to keep memory bounded
+    const uploadStream = bucket.openUploadStream(safeName, {
+      metadata: {
+        requestId: input.requestId,
+        userId: input.userId,
+      },
+    });
+
+    const uploadDone = new Promise<string>((resolve, reject) => {
+      uploadStream.on('error', reject);
+      uploadStream.on('finish', () => resolve(uploadStream.id.toString()));
+    });
+
+    for (let i = 0; i < input.totalChunks; i += 1) {
+      const chunkDoc = await chunkCol.findOne({
+        uploadId: input.uploadId,
+        requestId: input.requestId,
+        userId: input.userId,
+        chunkIndex: i,
+      });
+      if (!chunkDoc?.data) {
+        uploadStream.destroy(new Error('Missing chunk during assembly.'));
+        return { error: 'Upload chunk missing during assembly. Please retry.' };
+      }
+      const buf = Buffer.isBuffer(chunkDoc.data)
+        ? chunkDoc.data
+        : Buffer.from(chunkDoc.data.buffer);
+      if (i === 0 && (buf.length < 4 || buf[0] !== 0x50 || buf[1] !== 0x4b)) {
+        uploadStream.destroy(new Error('Invalid ZIP header.'));
+        return { error: 'Uploaded file does not appear to be a valid ZIP archive.' };
+      }
+      if (!uploadStream.write(buf)) {
+        await new Promise<void>(resolve => uploadStream.once('drain', resolve));
+      }
+    }
+
+    uploadStream.end();
+    const gridFsId = await uploadDone;
+
+    if (existing.zipFileId) {
+      try {
+        await bucket.delete(new ObjectId(existing.zipFileId));
+      } catch {
+        // Ignore missing previous GridFS entry
+      }
+    }
+
+    const now = new Date().toISOString();
+    const nextProjectName = input.projectName?.trim().slice(0, 120) || existing.projectName;
+    const nextNotes =
+      typeof input.notes === 'string' ? input.notes.trim().slice(0, 1000) : existing.notes;
+
+    const updated = await col.findOneAndUpdate(
+      { id: input.requestId, userId: input.userId },
+      {
+        $set: {
+          projectName: nextProjectName,
+          notes: nextNotes,
+          zipFileId: gridFsId,
+          zipFileName: safeName,
+          zipSizeBytes: totalBytes,
+          hostingStatus: 'submitted',
+          uploadedAt: now,
+          updatedAt: now,
+        },
+      },
+      { returnDocument: 'after', projection: { _id: 0 } }
+    );
+
+    if (!updated) {
+      return { error: 'Could not update hosting request.' };
+    }
+    return { request: updated };
+  } finally {
+    await chunkCol.deleteMany({ uploadId: input.uploadId }).catch(() => undefined);
+  }
+}
+
+export async function openHostingZipDownloadStream(
+  requestId: string
+): Promise<{
+  fileName: string;
+  sizeBytes?: number;
+  stream: ReturnType<GridFSBucket['openDownloadStream']>;
+} | null> {
+  const db = await readyDb();
+  const reqDoc = await getHostingRequestById(requestId);
+  if (!reqDoc?.zipFileId) return null;
+
+  const bucket = new GridFSBucket(db, { bucketName: 'host_zips' });
+  const fileObjectId = new ObjectId(reqDoc.zipFileId);
+  const stream = bucket.openDownloadStream(fileObjectId);
+
+  return {
+    fileName: reqDoc.zipFileName || `${reqDoc.id}.zip`,
+    sizeBytes: reqDoc.zipSizeBytes,
+    stream,
+  };
 }
 
 export async function getHostingZipDownload(

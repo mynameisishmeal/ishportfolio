@@ -1,17 +1,22 @@
 import { NextResponse } from 'next/server';
 import { deleteChatThread, markChatRead, sendAdminChatReply } from '@/lib/store';
 import { isAdminAuthenticated } from '@/lib/auth';
+import { safeErrorMessage, verifySameOrigin } from '@/lib/security';
 
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const csrfError = verifySameOrigin(request);
+    if (csrfError) {
+      return NextResponse.json({ success: false, error: csrfError }, { status: 403 });
+    }
     if (!(await isAdminAuthenticated())) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
     const { id } = await params;
-    const body = await request.json();
+    const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
     const text = typeof body?.text === 'string' ? body.text.trim() : '';
     if (!text) {
       return NextResponse.json(
@@ -27,8 +32,10 @@ export async function POST(
 
     return NextResponse.json({ success: true, thread });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to send reply';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to send reply') },
+      { status: 500 }
+    );
   }
 }
 
@@ -37,27 +44,37 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const csrfError = verifySameOrigin(request);
+    if (csrfError) {
+      return NextResponse.json({ success: false, error: csrfError }, { status: 403 });
+    }
     if (!(await isAdminAuthenticated())) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
     const { id } = await params;
-    const body = await request.json();
+    const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
     const thread = await markChatRead(id, Boolean(body?.unreadByAdmin));
     if (!thread) {
       return NextResponse.json({ success: false, error: 'Chat thread not found.' }, { status: 404 });
     }
     return NextResponse.json({ success: true, thread });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to update chat status';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to update chat status') },
+      { status: 500 }
+    );
   }
 }
 
 export async function DELETE(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const csrfError = verifySameOrigin(request);
+    if (csrfError) {
+      return NextResponse.json({ success: false, error: csrfError }, { status: 403 });
+    }
     if (!(await isAdminAuthenticated())) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
@@ -68,7 +85,9 @@ export async function DELETE(
     }
     return NextResponse.json({ success: true });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to delete chat';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to delete chat') },
+      { status: 500 }
+    );
   }
 }

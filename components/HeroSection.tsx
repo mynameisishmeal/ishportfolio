@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { useStore } from '@/context/StoreContext';
+import { toSafeHttpUrl } from '@/lib/format';
 import MotionReveal from './MotionReveal';
 import { ArrowRight, Github, Mail, MapPin, ShoppingBag } from 'lucide-react';
 
@@ -74,9 +75,9 @@ export default function HeroSection() {
                 <span>Browse Shop</span>
               </button>
 
-              {profile.githubUrl ? (
+              {toSafeHttpUrl(profile.githubUrl) ? (
                 <a
-                  href={profile.githubUrl}
+                  href={toSafeHttpUrl(profile.githubUrl)!}
                   target="_blank"
                   rel="noreferrer"
                   className="inline-flex items-center gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-medium text-zinc-300 transition hover:border-white/20 hover:text-white"

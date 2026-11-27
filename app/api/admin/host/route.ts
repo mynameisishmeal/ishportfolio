@@ -5,6 +5,9 @@ import {
   getHostingConfig,
   updateHostingConfig,
 } from '@/lib/store';
+import { safeErrorMessage, verifySameOrigin } from '@/lib/security';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
@@ -17,17 +20,24 @@ export async function GET() {
     ]);
     return NextResponse.json({ success: true, requests, config });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to load hosting requests';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to load hosting requests') },
+      { status: 500 }
+    );
   }
 }
 
 export async function PUT(request: Request) {
   try {
+    const csrfError = verifySameOrigin(request);
+    if (csrfError) {
+      return NextResponse.json({ success: false, error: csrfError }, { status: 403 });
+    }
+
     if (!(await isAdminAuthenticated())) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
-    const body = await request.json();
+    const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
     const price = Number(body?.price);
     const redirectFeeRaw = body?.redirectFee;
     const redirectFee =
@@ -78,7 +88,9 @@ export async function PUT(request: Request) {
 
     return NextResponse.json({ success: true, config: updated });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to update hosting fee';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to update hosting fee') },
+      { status: 500 }
+    );
   }
 }

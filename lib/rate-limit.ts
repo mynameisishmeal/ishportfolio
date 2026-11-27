@@ -1,3 +1,5 @@
+import { getDb } from './mongodb';
+
 interface RateLimitBucket {
   hits: number[];
 }
@@ -5,6 +7,8 @@ interface RateLimitBucket {
 declare global {
   // eslint-disable-next-line no-var
   var __ishRateLimitStore: Map<string, RateLimitBucket> | undefined;
+  // eslint-disable-next-line no-var
+  var __ishRateLimitIndexPromise: Promise<void> | undefined;
 }
 
 export interface RateLimitResult {
@@ -25,19 +29,84 @@ function getBucketMap(): Map<string, RateLimitBucket> {
 }
 
 export function getClientIp(request: Request): string {
-  const forwarded = request.headers.get('x-forwarded-for');
-  if (forwarded) {
-    const first = forwarded.split(',')[0]?.trim();
+  // Prefer platform-verified headers that clients cannot spoof on Vercel
+  const vercelForwarded = request.headers.get('x-vercel-forwarded-for');
+  if (vercelForwarded) {
+    const first = vercelForwarded.split(',')[0]?.trim();
     if (first) return first;
   }
 
-  const realIp =
-    request.headers.get('cf-connecting-ip') ||
-    request.headers.get('x-real-ip') ||
-    request.headers.get('x-client-ip');
-  if (realIp?.trim()) return realIp.trim();
+  const realIp = request.headers.get('x-real-ip')?.trim();
+  if (realIp) return realIp;
+
+  const forwarded = request.headers.get('x-forwarded-for');
+  if (forwarded) {
+    const parts = forwarded
+      .split(',')
+      .map(p => p.trim())
+      .filter(Boolean);
+    // Use the rightmost proxy-appended IP to resist spoofed leading X-Forwarded-For values
+    const rightmost = parts[parts.length - 1];
+    if (rightmost) return rightmost;
+  }
 
   return '127.0.0.1';
+}
+
+export async function checkPersistentRateLimit(options: {
+  namespace: string;
+  key: string;
+  maxRequests: number;
+  windowMs: number;
+}): Promise<RateLimitResult> {
+  try {
+    const db = await getDb();
+    const col = db.collection<{ _id: string; count: number; expiresAt: Date }>('rate_limits');
+    if (!globalThis.__ishRateLimitIndexPromise) {
+      globalThis.__ishRateLimitIndexPromise = col
+        .createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 })
+        .then(() => undefined)
+        .catch(() => {
+          globalThis.__ishRateLimitIndexPromise = undefined;
+        });
+    }
+    await globalThis.__ishRateLimitIndexPromise;
+
+    const now = Date.now();
+    const windowId = Math.floor(now / options.windowMs);
+    const resetAtMs = (windowId + 1) * options.windowMs;
+    const docId = `${options.namespace}:${options.key}:${windowId}`;
+
+    const doc = await col.findOneAndUpdate(
+      { _id: docId },
+      {
+        $inc: { count: 1 },
+        $setOnInsert: { expiresAt: new Date(resetAtMs + 60_000) },
+      },
+      { upsert: true, returnDocument: 'after' }
+    );
+
+    const count = doc?.count ?? 1;
+    if (count > options.maxRequests) {
+      return {
+        allowed: false,
+        limit: options.maxRequests,
+        remaining: 0,
+        resetAtMs,
+        retryAfterSeconds: Math.max(1, Math.ceil((resetAtMs - now) / 1000)),
+      };
+    }
+
+    return {
+      allowed: true,
+      limit: options.maxRequests,
+      remaining: Math.max(0, options.maxRequests - count),
+      resetAtMs,
+      retryAfterSeconds: 0,
+    };
+  } catch {
+    return checkRateLimit(options);
+  }
 }
 
 export function checkRateLimit(options: {

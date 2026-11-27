@@ -116,7 +116,6 @@ export default function AccessKeyAuthForm({
       } else {
         await applyAuthSession({
           user: data.user,
-          sessionToken: data.sessionToken,
           accessKey: authMode === 'create' ? data.accessKey : undefined,
         });
         setAccessKeyInput('');

@@ -15,6 +15,9 @@ import {
   rateLimitHeaders,
 } from '@/lib/rate-limit';
 import { notifyOrderToTelegram } from '@/lib/telegram';
+import { safeErrorMessage, verifySameOrigin } from '@/lib/security';
+
+export const dynamic = 'force-dynamic';
 
 export async function GET() {
   try {
@@ -24,13 +27,20 @@ export async function GET() {
     const orders = await getOrders();
     return NextResponse.json({ success: true, orders });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to fetch orders';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to fetch orders') },
+      { status: 500 }
+    );
   }
 }
 
 export async function POST(request: Request) {
   try {
+    const csrfError = verifySameOrigin(request);
+    if (csrfError) {
+      return NextResponse.json({ success: false, error: csrfError }, { status: 403 });
+    }
+
     const user = await getAuthenticatedHostUser(request);
     if (!user) {
       return NextResponse.json(
@@ -79,9 +89,9 @@ export async function POST(request: Request) {
         ? body.paymentReference.trim().toUpperCase()
         : '';
 
-    if (!items.length) {
+    if (!items.length || items.length > 50) {
       return NextResponse.json(
-        { success: false, error: 'Please select at least one item to order.' },
+        { success: false, error: 'Please select between 1 and 50 items to order.' },
         { status: 400, headers: rlHeaders }
       );
     }
@@ -152,7 +162,9 @@ export async function POST(request: Request) {
       { headers: rlHeaders }
     );
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to create order';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to create order') },
+      { status: 500 }
+    );
   }
 }

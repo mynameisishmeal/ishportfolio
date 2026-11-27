@@ -8,6 +8,9 @@ import {
   rateLimitHeaders,
 } from '@/lib/rate-limit';
 import { notifyContactToTelegram } from '@/lib/telegram';
+import { safeErrorMessage, verifySameOrigin } from '@/lib/security';
+
+export const dynamic = 'force-dynamic';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -19,13 +22,20 @@ export async function GET() {
     const messages = await getMessages();
     return NextResponse.json({ success: true, messages });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to fetch messages';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to fetch messages') },
+      { status: 500 }
+    );
   }
 }
 
 export async function POST(request: Request) {
   try {
+    const csrfError = verifySameOrigin(request);
+    if (csrfError) {
+      return NextResponse.json({ success: false, error: csrfError }, { status: 403 });
+    }
+
     const ip = getClientIp(request);
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
 
@@ -107,7 +117,9 @@ export async function POST(request: Request) {
       { headers: rlHeaders }
     );
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Failed to send message';
-    return NextResponse.json({ success: false, error: msg }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to send message') },
+      { status: 500 }
+    );
   }
 }

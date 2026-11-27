@@ -22,6 +22,12 @@ export default function ImageUploadField({
     const file = e.target.files?.[0];
     if (!file) return;
 
+    if (file.size > 4 * 1024 * 1024) {
+      setError('Image file must be under 4 MB.');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
+
     setUploading(true);
     setError('');
 
@@ -33,9 +39,9 @@ export default function ImageUploadField({
         method: 'POST',
         body: formData,
       });
-      const data = await res.json();
-      if (!res.ok || !data.success || !data.url) {
-        setError(data.error || 'Image upload failed.');
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.success || !data?.url) {
+        setError(data?.error || `Image upload failed (HTTP ${res.status}).`);
       } else {
         onChange(data.url);
       }

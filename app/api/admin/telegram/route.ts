@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server';
 import { isAdminAuthenticated } from '@/lib/auth';
 import { getTelegramConfig, updateTelegramConfig } from '@/lib/store';
 import { maskBotToken, sendTelegramText } from '@/lib/telegram';
+import { safeErrorMessage, verifySameOrigin } from '@/lib/security';
+
+export const dynamic = 'force-dynamic';
 
 function toSafeResponse(cfg: Awaited<ReturnType<typeof getTelegramConfig>>) {
   return {
@@ -23,18 +26,25 @@ export async function GET() {
     const cfg = await getTelegramConfig();
     return NextResponse.json({ success: true, telegram: toSafeResponse(cfg) });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to load Telegram settings';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to load Telegram settings') },
+      { status: 500 }
+    );
   }
 }
 
 export async function PUT(request: Request) {
   try {
+    const csrfError = verifySameOrigin(request);
+    if (csrfError) {
+      return NextResponse.json({ success: false, error: csrfError }, { status: 403 });
+    }
+
     if (!(await isAdminAuthenticated())) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
 
-    const body = await request.json();
+    const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
     const current = await getTelegramConfig();
 
     const clearToken = Boolean(body?.clearToken);
@@ -79,13 +89,20 @@ export async function PUT(request: Request) {
       telegram: toSafeResponse(saved),
     });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to save Telegram settings';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to save Telegram settings') },
+      { status: 500 }
+    );
   }
 }
 
 export async function POST(request: Request) {
   try {
+    const csrfError = verifySameOrigin(request);
+    if (csrfError) {
+      return NextResponse.json({ success: false, error: csrfError }, { status: 403 });
+    }
+
     if (!(await isAdminAuthenticated())) {
       return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401 });
     }
@@ -120,7 +137,9 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Telegram test failed';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Telegram test failed') },
+      { status: 500 }
+    );
   }
 }

@@ -136,7 +136,8 @@ export function StoreProvider({
       '#contact': 5,
     };
     const applyHash = () => {
-      const idx = hashMap[window.location.hash];
+      const cleanHash = window.location.hash.split(/[?&]/)[0];
+      const idx = hashMap[cleanHash];
       if (typeof idx === 'number') {
         setPageState(prev => {
           if (idx === prev.index) return prev;
@@ -258,8 +259,9 @@ export function StoreProvider({
     }
   }, []);
 
-  // Hydrate cached account user on mount, then verify persistent key session with server
+  // Hydrate cached account user on mount, purge any legacy localStorage token, and verify cookie session
   useEffect(() => {
+    writeStoredHostToken(null);
     try {
       const raw = localStorage.getItem(HOST_CACHE_KEY);
       if (raw) {

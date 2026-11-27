@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { NextResponse } from 'next/server';
 import { getAuthenticatedHostUser } from '@/lib/host-auth';
+import { isSafeHttpUrl } from '@/lib/format';
 import {
   createHostingRequest,
   getPaystackConfig,
@@ -13,17 +14,15 @@ import {
   getClientIp,
   rateLimitHeaders,
 } from '@/lib/rate-limit';
-
-function resolveRequestOrigin(request: Request): string {
-  const url = new URL(request.url);
-  const proto = request.headers.get('x-forwarded-proto') || url.protocol.replace(':', '');
-  const host =
-    request.headers.get('x-forwarded-host') || request.headers.get('host') || url.host;
-  return `${proto}://${host}`;
-}
+import { resolveSafeOrigin, safeErrorMessage, verifySameOrigin } from '@/lib/security';
 
 export async function POST(request: Request) {
   try {
+    const csrfError = verifySameOrigin(request);
+    if (csrfError) {
+      return NextResponse.json({ success: false, error: csrfError }, { status: 403 });
+    }
+
     const user = await getAuthenticatedHostUser(request);
     if (!user) {
       return NextResponse.json(
@@ -67,9 +66,9 @@ export async function POST(request: Request) {
         ? body.redirectTargetUrl.trim().slice(0, 300)
         : '';
 
-    if (includeRedirect && redirectTargetUrl && !/^https?:\/\//i.test(redirectTargetUrl)) {
+    if (includeRedirect && redirectTargetUrl && !isSafeHttpUrl(redirectTargetUrl)) {
       return NextResponse.json(
-        { success: false, error: 'Redirect target URL must start with http:// or https://' },
+        { success: false, error: 'Redirect target URL must be a valid http:// or https:// URL' },
         { status: 400, headers: rlHeaders }
       );
     }
@@ -109,8 +108,9 @@ export async function POST(request: Request) {
       );
     }
 
-    const origin = resolveRequestOrigin(request);
-    const callbackUrl = `${origin}/?host_ref=${encodeURIComponent(paymentReference)}#host`;
+    const origin = resolveSafeOrigin(request);
+    // Avoid hash fragment in callback_url because Paystack appends query params (&trxref=&reference=)
+    const callbackUrl = `${origin}/?host_ref=${encodeURIComponent(paymentReference)}`;
 
     const init = await initializePaystackTransaction({
       secretKey: paystackCfg.secretKey,
@@ -145,7 +145,9 @@ export async function POST(request: Request) {
       { headers: rlHeaders }
     );
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Failed to initialize hosting payment';
-    return NextResponse.json({ success: false, error: message }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: safeErrorMessage(err, 'Failed to initialize hosting payment') },
+      { status: 500 }
+    );
   }
 }

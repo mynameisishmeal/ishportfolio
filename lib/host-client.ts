@@ -1,29 +1,22 @@
 export const HOST_CACHE_KEY = 'ish_host_workspace_v1';
-export const HOST_TOKEN_KEY = 'ish_host_token_v1';
+const LEGACY_HOST_TOKEN_KEY = 'ish_host_token_v1';
 
-export function readStoredHostToken(): string | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    return window.localStorage.getItem(HOST_TOKEN_KEY);
-  } catch {
-    return null;
-  }
-}
-
-export function writeStoredHostToken(token: string | null): void {
+export function clearLegacyHostToken(): void {
   if (typeof window === 'undefined') return;
   try {
-    if (token) window.localStorage.setItem(HOST_TOKEN_KEY, token);
-    else window.localStorage.removeItem(HOST_TOKEN_KEY);
+    window.localStorage.removeItem(LEGACY_HOST_TOKEN_KEY);
   } catch {
     // Ignore storage errors
   }
 }
 
+export function writeStoredHostToken(_token: string | null): void {
+  // Sessions are maintained strictly via httpOnly cookies; always purge legacy localStorage tokens.
+  clearLegacyHostToken();
+}
+
 export function hostAuthHeaders(extra?: Record<string, string>): Record<string, string> {
-  const token = readStoredHostToken();
   return {
-    ...(token ? { 'x-host-session': token } : {}),
     ...(extra || {}),
   };
 }
