@@ -1,5 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
-  <rect width="32" height="32" rx="8" fill="#040507"/>
-  <rect x="1" y="1" width="30" height="30" rx="7" fill="none" stroke="#d4af37" stroke-width="1.5" stroke-opacity="0.4"/>
-  <path d="M18 4L8 18H16L14 28L24 14H16L18 4Z" fill="#d4af37"/>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 170" width="400" height="170"><metadata><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/"><rdf:Description><dc:creator>RealFaviconGenerator</dc:creator><dc:source>https://realfavicongenerator.net</dc:source></rdf:Description></rdf:RDF></metadata><rect width="400" height="170" rx="14" fill="#121212"></rect><polygon points="200,20 234,54 200,88 166,54" fill="none" stroke="#d4af37" stroke-width="2"></polygon><polygon points="200,28 226,54 200,80 174,54" fill="none" stroke="#d4af37" stroke-width="0.8" opacity="0.6"></polygon><text x="200" y="64" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="30" fill="#d4af37">
+    I
+  </text><text x="200" y="128" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="32" letter-spacing="10" fill="#ffffff">
+    ISHMEAL
+  </text><line x1="145" y1="143" x2="255" y2="143" stroke="#d4af37" stroke-width="1" opacity="0.7"></line><style>@media (prefers-color-scheme: light) { :root { filter: contrast(1) brightness(1); } }
+</style></svg>
